@@ -1,0 +1,174 @@
+SCVP { }
+
+DEFINITIONS IMPLICIT TAGS ::=
+
+BEGIN
+
+CVRequest ::= SEQUENCE {
+	cvRequestVersion		INTEGER DEFAULT 1,
+	query					Query }
+
+Query ::= SEQUENCE {
+	queriedCerts			 CertReferences,
+	checks					 CertChecks,
+	validationPolicy		 ValidationPolicy,
+	intermediateCerts    [4] CertBundle OPTIONAL }
+
+CertChecks ::= SEQUENCE SIZE (1..MAX) OF OBJECT IDENTIFIER
+
+CertReferences ::= CHOICE {
+	pkcRefs					[0] SEQUENCE SIZE (1..MAX) OF PKCReference,
+	acRefs					[1] SEQUENCE SIZE (1..MAX) OF ACReference }
+
+CertReference ::= CHOICE {
+	cert					[0] Certificate,
+	pkcRef					[1] SCVPCertID,
+	attrCert				[2] OCTET STRING,
+	acRef					[3] SCVPCertID }
+
+PKCReference ::= CHOICE {
+	cert					[0] OCTET STRING,
+	pkcRef					[1] SCVPCertID }
+
+ACReference ::= CHOICE {
+	attrCert				[2] OCTET STRING,
+	acRef					[3] SCVPCertID }
+
+SCVPCertID ::= SEQUENCE {
+	certHash				OCTET STRING,
+	issuerSerial			SCVPIssuerSerial,
+	hashAlgorithm			AlgorithmIdentifier }
+
+AlgorithmIdentifier  ::=  SEQUENCE  {
+	algorithm				OBJECT IDENTIFIER }
+
+SCVPIssuerSerial ::= SEQUENCE {
+	serialNumber			CertificateSerialNumber }
+
+CertificateSerialNumber  ::=  INTEGER
+
+ValidationPolicy ::= SEQUENCE {
+	validationPolRef		ValidationPolRef,
+	userPolicySet          [1] SEQUENCE SIZE (1..MAX) OF OBJECT IDENTIFIER OPTIONAL,
+	inhibitPolicyMapping   [2] BOOLEAN OPTIONAL,
+	requireExplicitPolicy  [3] BOOLEAN OPTIONAL,
+	inhibitAnyPolicy       [4] BOOLEAN OPTIONAL,
+	trustAnchors           [5] TrustAnchors OPTIONAL}
+
+ValidationPolRef ::= SEQUENCE {
+	valPolId				OBJECT IDENTIFIER }
+	
+TrustAnchors ::= SEQUENCE SIZE (1..MAX) OF PKCReference
+
+CertBundle ::= SEQUENCE SIZE (1..MAX) OF Certificate
+
+Certificate ::= OCTET STRING
+
+CVResponse ::= SEQUENCE {
+	cvResponseVersion		INTEGER,
+	serverConfigurationID	INTEGER,
+	producedAt				GeneralizedTime,
+	responseStatus			ResponseStatus,
+	respValidationPolicy	[0] RespValidationPolicy OPTIONAL,
+	replyObjects			[4] ReplyObjects OPTIONAL }
+
+ResponseStatus ::= SEQUENCE {
+	statusCode				CVStatusCode }
+
+CVStatusCode ::= ENUMERATED {
+    okay                               (0),
+    skipUnrecognizedItems              (1),
+    tooBusy                           (10),
+    invalidRequest                    (11),
+    internalError                     (12),
+    badStructure                      (20),
+    unsupportedVersion                (21),
+    abortUnrecognizedItems            (22),
+    unrecognizedSigKey                (23),
+    badSignatureOrMAC                 (24),
+    unableToDecode                    (25),
+    notAuthorized                     (26),
+    unsupportedChecks                 (27),
+    unsupportedWantBacks              (28),
+    unsupportedSignatureOrMAC         (29),
+    invalidSignatureOrMAC             (30),
+    protectedResponseUnsupported      (31),
+    unrecognizedResponderName         (32),
+    relayingLoop                      (40),
+    unrecognizedValPol                (50),
+    unrecognizedValAlg                (51),
+    fullRequestInResponseUnsupported  (52),
+    fullPolResponseUnsupported        (53),
+    inhibitPolicyMappingUnsupported   (54),
+    requireExplicitPolicyUnsupported  (55),
+    inhibitAnyPolicyUnsupported       (56),
+    validationTimeUnsupported         (57),
+    unrecognizedCritQueryExt          (63),
+    unrecognizedCritRequestExt        (64) }
+
+RespValidationPolicy ::= ValidationPolicy
+
+ReplyObjects ::= SEQUENCE SIZE (1..MAX) OF CertReply
+
+CertReply ::= SEQUENCE {
+	cert					CertReference,
+	replyStatus				ReplyStatus DEFAULT success,
+	replyValTime			GeneralizedTime,
+	replyChecks				ReplyChecks,
+	validationErrors		[0] SEQUENCE SIZE (1..MAX) OF OBJECT IDENTIFIER OPTIONAL }
+
+ReplyStatus ::= ENUMERATED {
+	success                    (0),
+	malformedPKC               (1),
+	malformedAC                (2),
+	unavailableValidationTime  (3),
+	referenceCertHashFail      (4),
+	certPathConstructFail      (5),
+	certPathNotValid           (6),
+	certPathNotValidNow        (7),
+	wantBackUnsatisfied        (8) }
+
+ReplyChecks ::= SEQUENCE OF ReplyCheck
+
+ReplyCheck ::= SEQUENCE {
+	check                      OBJECT IDENTIFIER,
+	status                     INTEGER DEFAULT 0 }
+
+sha-1 OBJECT IDENTIFIER ::= { iso(1) identified-organization(3)	oiw(14) secsig(3) algorithm(2) 26 }
+
+-- SCVP Check Identifiers
+
+id-stc OBJECT IDENTIFIER ::= { iso(1) identified-organization(3) dod(6) internet(1) security(5) mechanisms(5) pkix(7) 17 }
+
+id-stc-build-pkc-path									OBJECT IDENTIFIER ::= { id-stc 1 }
+id-stc-build-valid-pkc-path								OBJECT IDENTIFIER ::= { id-stc 2 }
+id-stc-build-status-checked-pkc-path 					OBJECT IDENTIFIER ::= { id-stc 3 }
+id-stc-build-aa-path									OBJECT IDENTIFIER ::= { id-stc 4 }
+id-stc-build-valid-aa-path								OBJECT IDENTIFIER ::= { id-stc 5 }
+id-stc-build-status-checked-aa-path						OBJECT IDENTIFIER ::= { id-stc 6 }
+id-stc-status-check-ac-and-build-status-checked-aa-path OBJECT IDENTIFIER ::= { id-stc 7 }
+
+-- SCVP Validation Policy and Algorithm Identifiers
+
+id-svp OBJECT IDENTIFIER ::= { iso(1) identified-organization(3) dod(6) internet(1) security(5) mechanisms(5) pkix(7) 19 }
+
+id-svp-defaultValPolicy OBJECT IDENTIFIER ::= { id-svp 1 }
+
+-- SCVP Basic Validation Algorithm Identifier
+
+id-svp-basicValAlg OBJECT IDENTIFIER ::= { id-svp 3 }
+
+-- SCVP Basic Validation Algorithm Errors
+
+id-bvae OBJECT IDENTIFIER ::= { id-svp-basicValAlg }
+
+id-bvae-expired				OBJECT IDENTIFIER ::= { id-bvae 1 }
+id-bvae-not-yet-valid		OBJECT IDENTIFIER ::= { id-bvae 2 }
+id-bvae-wrongTrustAnchor	OBJECT IDENTIFIER ::= { id-bvae 3 }
+id-bvae-noValidCertPath		OBJECT IDENTIFIER ::= { id-bvae 4 }
+id-bvae-revoked				OBJECT IDENTIFIER ::= { id-bvae 5 }
+id-bvae-invalidKeyPurpose	OBJECT IDENTIFIER ::= { id-bvae 9 }
+id-bvae-invalidKeyUsage		OBJECT IDENTIFIER ::= { id-bvae 10 }
+id-bvae-invalidCertPolicy	OBJECT IDENTIFIER ::= { id-bvae 11 }
+
+END
