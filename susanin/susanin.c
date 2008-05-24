@@ -8,6 +8,8 @@
 #include <sys/un.h>
 #include <unistd.h>
 #include <glib.h>
+#include <openssl/ssl.h>
+#include <locale.h>
 
 #include "connection.h"
 #include "scvp_defs.h"
@@ -15,46 +17,106 @@
 #include "crypto_openssl.h"
 #include "config.h"
 #include "logger.h"
+#include "update_chain.h"
+
+struct command_line_values {
+	char *conf_file;
+	int daemon;
+	int update_crl;
+	char *ca_name;
+	char *ca_path;
+	char *crl_path;
+	char *tmp_path;
+};
+
+extern struct config cfg;
 
 struct scvp_proto_ctx *scvp_ctx;
 
-static char *parse_command_line(int argc, char *argv[])
+static int parse_command_line(int argc, char *argv[], struct command_line_values *cmd_vals)
 {
-	char *conf_file = NULL;
 	GOptionContext *opt_ctx;
 	GOptionEntry entries[] = {
-		{ "config", 'c', 0, G_OPTION_ARG_STRING, &conf_file, "configuration file", NULL},
-		{ "daemonize", 'd', 0, G_OPTION_ARG_NONE, &cfg.daemon, "run as daemon", NULL},
+		{ "config", 'c', 0, G_OPTION_ARG_STRING, &cmd_vals->conf_file, "configuration file", NULL},
+		{ "daemonize", 'd', 0, G_OPTION_ARG_NONE, &cmd_vals->daemon, "run as daemon", NULL},
+		{ "update-all-crl", 0, 0, G_OPTION_ARG_NONE, &cmd_vals->update_crl, "update all CA certificates CRL", NULL},
+		{ "update-cert-crl", 0, 0, G_OPTION_ARG_STRING, &cmd_vals->ca_name, "update CA certificate CRL", NULL},
+		{ "ca-cache-path", 0, 0, G_OPTION_ARG_STRING, &cmd_vals->ca_path, "CA certificates cache path", NULL},
+		{ "crl-cache-path", 0, 0, G_OPTION_ARG_STRING, &cmd_vals->crl_path, "CRL cache path", NULL},
+		{ "tmp-path", 0, 0, G_OPTION_ARG_STRING, &cmd_vals->tmp_path, "temporary files path", NULL},
 		{ NULL }
 	};
 
+	memset(cmd_vals, 0, sizeof(*cmd_vals));
 	if (!(opt_ctx = g_option_context_new("- PKI path validation daemon")))
-		return NULL;
+		return 1;
 	g_option_context_add_main_entries(opt_ctx, entries, NULL);
-	if (!g_option_context_parse (opt_ctx, &argc, &argv, NULL)) {
+	if (!g_option_context_parse(opt_ctx, &argc, &argv, NULL)) {
 		g_option_context_free(opt_ctx);
 		fprintf(stderr, "Failed to parse command line\n");
-		return NULL;
+		return 1;
 	}
+	if (cmd_vals->ca_name)
+		cmd_vals->update_crl = 1;
 	g_option_context_free(opt_ctx);
-	return conf_file;
+	return 0;
+}
+
+static void cmd_vals_free(struct command_line_values *cmd_vals)
+{
+	free(cmd_vals->conf_file);
+	free(cmd_vals->ca_name);
+	free(cmd_vals->ca_path);
+	free(cmd_vals->crl_path);
+	free(cmd_vals->tmp_path);
 }
 
 int main(int argc, char **argv) {
-	int err, listen_sd;
+	int err = 1, listen_sd;
 	unsigned int client_len;
 	struct sockaddr_un sa_serv;
-	char *conf_file;
 	pid_t pid, sid;
 	FILE *pidf;
 	pthread_attr_t pth_attr;
 	pthread_t thread;
 	struct connection *con;
+	struct command_line_values cmd_vals;
 
-	if (!(conf_file = parse_command_line(argc, argv))) {
+	setlocale(LC_ALL,"");
+
+	if (parse_command_line(argc, argv, &cmd_vals))
+		return 1;
+
+	if (cmd_vals.update_crl) {
+		if (!cmd_vals.ca_path) {
+			fprintf(stderr,"Failed to retrieve certificate cache path\n");
+			goto end;
+		}
+		if (!cmd_vals.crl_path) {
+			fprintf(stderr,"Failed to retrieve CRL cache path\n");
+			goto end;
+		}
+		if (!cmd_vals.tmp_path) {
+			fprintf(stderr,"Failed to retrieve temp files path\n");
+			goto end;
+		}
+		if (cmd_vals.ca_name) {
+			if (update_ca_cert_crl(cmd_vals.ca_name, cmd_vals.ca_path, cmd_vals.crl_path, cmd_vals.tmp_path))
+				goto end;
+		}
+		else {
+			if (update_all_ca_certs_crl(cmd_vals.ca_path, cmd_vals.crl_path, cmd_vals.tmp_path))
+				goto end;
+		}
+		err = 0;
+		goto end;
+	}
+
+	if (!cmd_vals.conf_file) {
 		fprintf(stderr,"Failed to retrieve configuration file name\n");
 		return 1;
 	}
+	cfg.daemon = cmd_vals.daemon;
 
 	logger_init();
 
@@ -63,10 +125,8 @@ int main(int argc, char **argv) {
 		return 1;
 	}
 
-	if (load_config(conf_file) != 0) {
-		log_msg(LOG_DEBUG, "Failed to read configuration file '%s'", conf_file);
+	if (load_config(cmd_vals.conf_file) != 0)
 		return 1;
-	}
 
 	openssl_init();
 
@@ -148,5 +208,10 @@ int main(int argc, char **argv) {
 		}
 	}
 	close (listen_sd);
-	return 0;
+	err = 0;
+
+end:
+	cmd_vals_free(&cmd_vals);
+	openssl_deinit();
+	return err;
 }

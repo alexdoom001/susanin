@@ -15,7 +15,7 @@ struct scvp_proto_ctx {
 	asn1_node asn1_defs;
 };
 
-#define ASN1_ERR(err) if (err != 0) { goto end; }
+#define ASN1_ERR(err) if (err != ASN1_SUCCESS) { goto end; }
 
 static const struct oid_table check_oid[] = {
 	{"1.3.6.1.5.5.7.17.1", BUILD_PKC_PATH},                                     /* id-stc-build-pkc-path */
@@ -61,7 +61,7 @@ static unsigned int get_oid_flag_by_str(const struct oid_table *table, int table
 	int i;
 
 	for (i = 0; i < table_len; i++)
-		if (!strcmp(str, table[i].str))
+		if (strcmp(str, table[i].str) == 0)
 			return table[i].flag;
 	return 0;
 }
@@ -258,19 +258,19 @@ struct scvp_request *unpack_scvp_request(const struct scvp_proto_ctx *ctx, const
 	len = sizeof(str_tmp) - 1;
 	err = asn1_read_value(asn1, "query.validationPolicy.inhibitPolicyMapping", str_tmp, &len);
 	if (err == ASN1_SUCCESS) {
-		if (!strcmp(str_tmp, "TRUE"))
+		if (strcmp(str_tmp, "TRUE") == 0)
 			rqst->user_poly_flags |= SCVP_POLY_INHIBIT_MAP;
 	}
 	len = sizeof(str_tmp) - 1;
 	err = asn1_read_value(asn1, "query.validationPolicy.requireExplicitPolicy", str_tmp, &len);
 	if (err == ASN1_SUCCESS) {
-		if (!strcmp(str_tmp, "TRUE"))
+		if (strcmp(str_tmp, "TRUE") == 0)
 			rqst->user_poly_flags |= SCVP_POLY_EXPLICIT_POLICY;
 	}
 	len = sizeof(str_tmp) - 1;
 	err = asn1_read_value(asn1, "query.validationPolicy.inhibitAnyPolicy", str_tmp, &len);
 	if (err == ASN1_SUCCESS) {
-		if (!strcmp(str_tmp, "TRUE"))
+		if (strcmp(str_tmp, "TRUE") == 0)
 			rqst->user_poly_flags |= SCVP_POLY_INHIBIT_ANY;
 	}
 
@@ -382,7 +382,7 @@ end:
 	return NULL;
 }
 
-unsigned char *pack_scvp_response(const struct scvp_proto_ctx *ctx, const struct scvp_response *resp, int *resp_len)
+unsigned char *pack_scvp_response(const struct scvp_proto_ctx *ctx, const struct scvp_response_srv *resp, int *resp_len)
 {
 	int err, resp_ver = 1, config_id = 1;
 	asn1_node asn1 = NULL;
@@ -402,6 +402,13 @@ unsigned char *pack_scvp_response(const struct scvp_proto_ctx *ctx, const struct
 	ASN1_ERR(err);
 	err = asn1_write_value(asn1, "responseStatus.statusCode", &resp->response_status, 1);
 	ASN1_ERR(err);
+	if (resp->error_msg) {
+		err = asn1_write_value(asn1, "responseStatus.errorMessage", resp->error_msg, 0);
+		ASN1_ERR(err);
+	} else {
+		err = asn1_write_value(asn1, "responseStatus.errorMessage", NULL, 0);
+		ASN1_ERR(err);
+	}
 
 	if (resp->response_status == OKAY) {
 		err = asn1_write_value(asn1, "respValidationPolicy", NULL, 0);
@@ -492,15 +499,15 @@ static time_t string_to_time(const char *str)
 	return mktime(&t);
 }
 
-struct scvp_response *unpack_scvp_response(const struct scvp_proto_ctx *ctx, const unsigned char *resp_data, int resp_len)
+struct scvp_response_cli *unpack_scvp_response(const struct scvp_proto_ctx *ctx, const unsigned char *resp_data, int resp_len)
 {
 	int err, rspn_ver = 0, config_id = 0, len;
 	asn1_node asn1 = NULL;
-	struct scvp_response *resp;
+	struct scvp_response_cli *resp;
 	struct scvp_cert_reply *cert_reply = NULL;
 	char str_tmp[64];
 
-	if (!(resp = response_alloc()))
+	if (!(resp = response_cli_alloc()))
 		return NULL;
 
 	err = asn1_create_element(ctx->asn1_defs, "SCVP.CVResponse", &asn1);
@@ -530,6 +537,16 @@ struct scvp_response *unpack_scvp_response(const struct scvp_proto_ctx *ctx, con
 	if (resp->response_status != OKAY) {
 		asn1_delete_structure(&asn1);
 		return resp;
+	}
+	if (!(resp->error_msg = malloc(SCVP_ERR_MSG_MAX_SIZE)))
+		goto end;
+	len = SCVP_ERR_MSG_MAX_SIZE - 1;
+	err = asn1_read_value(asn1, "responseStatus.errorMessage", resp->error_msg, &len);
+	if (err == ASN1_SUCCESS)
+		resp->error_msg[len] = 0;
+	else {
+		free(resp->error_msg);
+		resp->error_msg = NULL;
 	}
 
 	if (!(cert_reply = cert_reply_alloc()))
@@ -582,7 +599,7 @@ struct scvp_response *unpack_scvp_response(const struct scvp_proto_ctx *ctx, con
 
 end:
 	asn1_delete_structure(&asn1);
-	response_free(resp);
+	response_cli_free(resp);
 	cert_reply_free(cert_reply);
 	return NULL;
 }

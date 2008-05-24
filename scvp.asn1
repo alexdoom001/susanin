@@ -73,7 +73,8 @@ CVResponse ::= SEQUENCE {
 	replyObjects			[4] ReplyObjects OPTIONAL }
 
 ResponseStatus ::= SEQUENCE {
-	statusCode				CVStatusCode }
+	statusCode				CVStatusCode,
+	errorMessage			OCTET STRING OPTIONAL }
 
 CVStatusCode ::= ENUMERATED {
     okay                               (0),

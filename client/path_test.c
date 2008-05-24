@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <string.h>
 #include <unistd.h>
 #include <openssl/ssl.h>
 #include <pthread.h>
@@ -10,8 +11,8 @@
 
 #define MAX_THREAD_NUMBER 1
 
+int print_error;
 const char *socket_file, *anchor_path, *untrusted_path;
-scvp_cli_ctx *scvp_ctx;
 
 X509 *load_cert(const char *file)
 {
@@ -106,7 +107,7 @@ int run_basic_test(const struct test_table *table, int table_size)
 {
 	int err = 1, i, res;
 	X509 *cert, *anchor = NULL;
-	char *file_path, file_name[64];
+	char *file_path, file_name[64], *error_msg;
 	scvp_cli_rqst cli_rqst;
 
 	memset(&cli_rqst, 0 , sizeof(cli_rqst));
@@ -141,7 +142,12 @@ int run_basic_test(const struct test_table *table, int table_size)
 		cli_rqst.rqst_ctx.uchain = get_uchain(cert, untrusted_path, 100);
 		cli_rqst.rqst_ctx.checks = SCVP_CLI_BUILD_STATUS_CHECKED_PKC_PATH;
 
-		res = scvp_cli_check_certificate(&cli_rqst);
+		res = scvp_cli_check_certificate(&cli_rqst, &error_msg);
+		if (error_msg) {
+			if (print_error)
+				printf("%s error message: %s\n", table[i].test_name, error_msg);
+			free(error_msg);
+		}
 		if (res != table[i].test_result)
 			fprintf(stderr, "%s FAILED\n", table[i].test_name);
 		X509_free(cert);
@@ -158,7 +164,7 @@ static int run_policy_test(const struct test_policy_table *table, int table_size
 {
 	int err = 1, i, res;
 	X509 *cert;
-	char *file_path, file_name[64];
+	char *file_path, file_name[64], *error_msg;
 	const char *user_poly_set[3];
 	int user_poly_num;
 	scvp_cli_rqst cli_rqst;
@@ -199,7 +205,12 @@ static int run_policy_test(const struct test_policy_table *table, int table_size
 		cli_rqst.rqst_ctx.user_poly_num = user_poly_num;
 		cli_rqst.rqst_ctx.user_poly_falgs = table[i].user_poly_flags;
 
-		res = scvp_cli_check_certificate(&cli_rqst);
+		res = scvp_cli_check_certificate(&cli_rqst, &error_msg);
+		if (error_msg) {
+			if (print_error)
+				fprintf(stderr, "%s error message: %s\n", table[i].test_name, error_msg);
+			free(error_msg);
+		}
 		if (res != table[i].test_result)
 			fprintf(stderr, "%s FAILED\n", table[i].test_name);
 		X509_free(cert);
@@ -335,13 +346,16 @@ int main(int argc, char **argv)
 	int i, err;
 	pthread_t thread[MAX_THREAD_NUMBER];
 
-	if (argc != 4) {
-		printf("Usage: path_test [socket_file] [trusted_path] [untrusted_path]\n");
+	if (argc < 4 || argc > 5) {
+		printf("Usage: path_test socket_file trusted_path untrusted_path [print-err]\n");
 		return 1;
 	}
 	socket_file = argv[1];
 	anchor_path = argv[2];
 	untrusted_path = argv[3];
+	if (argc == 5)
+		if (strcmp(argv[4], "print-error") == 0)
+			print_error = 1;
 
 	for (i = 0; i < MAX_THREAD_NUMBER; i++) {
 		err = pthread_create(&thread[i], NULL, test_thread, NULL);

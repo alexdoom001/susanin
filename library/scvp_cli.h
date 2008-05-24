@@ -43,7 +43,18 @@ struct scvp_cli_rqst_st {
 
 typedef struct scvp_cli_rqst_st scvp_cli_rqst;
 
-int scvp_cli_check_certificate(const scvp_cli_rqst *cli_rqst)
+/**
+ * @brief Check PKI certificate via SCVP server
+ *
+ * @param[in] cli_rqst      Client SCVP request data.
+ * @param[out] error_msg    Error description message. Appropriate data
+ *                          buffer is alloced internally. It should be
+ *                          freed respectively.
+ *
+ * @return SCVP_CLI_CERT_OK on certificate check success, otherwise
+ *     respective error code
+ */
+int scvp_cli_check_certificate(const scvp_cli_rqst *cli_rqst, char **error_msg)
 	__attribute__((nonnull));
 
 #ifdef __cplusplus

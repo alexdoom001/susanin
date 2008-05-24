@@ -2,8 +2,12 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <openssl/ssl.h>
+#include <glib.h>
 
 #include "config.h"
+
+extern struct config cfg;
 
 void logger_init(void)
 {

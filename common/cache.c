@@ -59,7 +59,7 @@ end:
 }
 
 
-static int read_cache_file(BIO *bio, X509 **cert, X509_CRL **crl, const char *file_path)
+int read_cache_file(BIO *bio, X509 **cert, X509_CRL **crl, const char *file_path)
 {
 	FILE *file;
 
@@ -83,7 +83,7 @@ end:
 	return 1;
 }
 
-static int write_cache_file(BIO *bio, X509 *cert, X509_CRL *crl, const char *file_path)
+int write_cache_file(BIO *bio, X509 *cert, X509_CRL *crl, const char *file_path)
 {
 	FILE *file;
 
@@ -234,7 +234,6 @@ static int create_cert_link(const X509 *cert, const char *cert_path, const char 
 	char file_name[32];
 	gchar *link_path;
 
-
 	if (!(cert_ref = get_cert_ref(cert)))
 		return 1;
 	for (i = 0; i < MAX_CACHE_HASH_COLLISION_NUM; i++) {
@@ -338,62 +337,79 @@ end:
 	return err;
 }
 
-static int update_crl(X509_CRL *crl, const char *cache_path)
+X509_CRL *get_cert_crl(X509 *cert, const char *cache_path, char **crl_path)
 {
-	int err = 1, i;
+	X509_CRL *crl = NULL;
+	EVP_PKEY *pkey;
+	BIO *bio = NULL;
 	unsigned long hash;
-	BIO *bio;
-	X509_CRL *crl_cur;
-	char file_name[32];
-	gchar *file_path;
+	char *file_path = NULL;
+	int i;
 
+	if (!(pkey = X509_get_pubkey(cert)))
+		return NULL;
 	if (!(bio = BIO_new(BIO_s_file())))
-		return 1;
-	hash = X509_NAME_hash(X509_CRL_get_issuer(crl));
+		goto end;
+	hash = X509_NAME_hash(X509_get_subject_name(cert));
 	for (i = 0; i < MAX_CACHE_HASH_COLLISION_NUM; i++) {
+		char file_name[32];
+		X509_CRL *current_crl;
+
 		snprintf(file_name, sizeof(file_name),"%08lx.r%d", hash, i);
 		if (!(file_path = g_build_filename(cache_path, file_name, NULL)))
 			goto end;
 		if (!access(file_path, F_OK)) {
-			if (read_cache_file(bio, NULL, &crl_cur, file_path)) {
+			if (read_cache_file(bio, NULL, &current_crl, file_path)) {
 				g_free(file_path);
-				file_path = NULL;
 				continue;
 			}
-			if (!X509_NAME_cmp(X509_CRL_get_issuer(crl), X509_CRL_get_issuer(crl_cur)))	{
-				X509_CRL_free(crl_cur);
+			if (X509_CRL_verify(current_crl, pkey)) {
+				crl = current_crl;
 				break;
 			}
-			X509_CRL_free(crl_cur);
+			X509_CRL_free(current_crl);
 		}
 		g_free(file_path);
 		file_path = NULL;
 	}
 	if (i == MAX_CACHE_HASH_COLLISION_NUM)
 		goto end;
-	if (write_cache_file(bio, NULL, crl, file_path))
-		goto end;
+
+end:
+	if (crl && crl_path)
+		*crl_path = file_path;
+	else
+		g_free(file_path);
+	EVP_PKEY_free(pkey);
+	BIO_free(bio);
+	return crl;
+}
+
+int cache_crl(X509_CRL *crl, X509 *cert, const char *cache_path)
+{
+	int err = 1;
+	BIO *bio;
+	X509_CRL *current_crl;
+	char *crl_path = NULL;
+
+	if (!(bio = BIO_new(BIO_s_file())))
+		return 1;
+	current_crl = get_cert_crl(cert, cache_path, &crl_path);
+	if (current_crl) {
+		if (ASN1_INTEGER_get(crl->crl_number) > ASN1_INTEGER_get(current_crl->crl_number)) {
+			if (!crl_path)
+				goto end;
+			if (write_cache_file(bio, NULL, crl, crl_path))
+				goto end;
+		}
+	} else
+		if (store_crl(crl, cache_path))
+			goto end;
 	err = 0;
 
 end:
-	g_free(file_path);
 	BIO_free(bio);
-	return err;
-}
-
-int cache_crl(X509_STORE_CTX *store_ctx, X509_CRL *crl, const char *cache_path)
-{
-	int err = 0;
-	X509_OBJECT xobj;
-
-	if (X509_STORE_get_by_subject(store_ctx, X509_LU_CRL, X509_CRL_get_issuer(crl), &xobj)) {
-		if (ASN1_INTEGER_get(crl->crl_number) > ASN1_INTEGER_get(xobj.data.crl->crl_number))
-			if (!update_crl(crl, cache_path))
-				err = 1;
-		X509_OBJECT_free_contents(&xobj);
-	} else {
-		if (store_crl(crl, cache_path))
-			err = 2;
-	}
+	X509_CRL_free(current_crl);
+	free(crl_path);
 	return err;
 }

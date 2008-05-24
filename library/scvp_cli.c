@@ -66,7 +66,7 @@ end:
 	return NULL;
 }
 
-static int process_scvp_response(const struct scvp_request *rqst, const struct scvp_response *resp)
+static int process_scvp_response(const struct scvp_request *rqst, const struct scvp_response_cli *resp)
 {
 	struct scvp_cert_reply *cert_reply;
 	struct scvp_cert_der *cert_der;
@@ -105,14 +105,17 @@ scvp_cli_deinit(void)
 }
 
 int __attribute__ ((visibility ("default")))
-scvp_cli_check_certificate(const scvp_cli_rqst *cli_rqst)
+scvp_cli_check_certificate(const scvp_cli_rqst *cli_rqst, char **error_msg)
 {
 	int err = 0, ret, sd;
 	struct sockaddr_un sa;
 	struct scvp_request *scvp_rqst = NULL;
-	struct scvp_response *scvp_resp = NULL;
+	struct scvp_response_cli *scvp_resp = NULL;
 	unsigned char *rqst_data = NULL, *resp_data = NULL;
 	int rqst_len, resp_len;
+
+	if (error_msg)
+		*error_msg = NULL;
 
 	if (!cli_rqst->socket_file)
 		return SCVP_CLI_ERR_PARAMS;
@@ -154,10 +157,16 @@ scvp_cli_check_certificate(const scvp_cli_rqst *cli_rqst)
 		goto end;
 	}
 	err = process_scvp_response(scvp_rqst, scvp_resp);
+	if (scvp_resp->error_msg) {
+		if (error_msg && err == SCVP_CLI_ERR_BAD_CERT)
+			*error_msg = scvp_resp->error_msg;
+		else
+			free(scvp_resp->error_msg);
+	}
 
 end:
 	request_free(scvp_rqst);
-	response_free(scvp_resp);
+	response_cli_free(scvp_resp);
 	free(rqst_data);
 	free(resp_data);
 	close(sd);

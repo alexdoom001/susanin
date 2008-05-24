@@ -17,7 +17,10 @@ int check_cached_cert(X509 *cert, const char *cache_path)
 	__attribute__((nonnull));
 int cache_cert(X509 *cert, const char *cache_path)
 	__attribute__((nonnull));
-int cache_crl(X509_STORE_CTX *store_ctx, X509_CRL *crl, const char *cache_path)
+X509_CRL *get_cert_crl(X509 *cert, const char *cache_path, char **crl_path);
+int cache_crl(X509_CRL *crl, X509 *cert, const char *cache_path)
 	__attribute__((nonnull));
+int read_cache_file(BIO *bio, X509 **cert, X509_CRL **crl, const char *file_path);
+int write_cache_file(BIO *bio, X509 *cert, X509_CRL *crl, const char *file_path);
 
 #endif /* CACHE_H */

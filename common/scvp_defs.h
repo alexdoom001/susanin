@@ -1,5 +1,5 @@
 #ifndef SCVP_DEFS_H
-#define SCVP_DEFS_H_
+#define SCVP_DEFS_H
 
 /* SCVP Check Identifiers */
 #define BUILD_PKC_PATH                                      0x01
@@ -111,9 +111,18 @@ struct scvp_cert_reply {
 	unsigned int val_errors;
 };
 
-struct scvp_response {
+struct scvp_response_srv {
 	time_t produced_at;
 	unsigned int response_status;
+	const char *error_msg;
+	unsigned int val_poly;
+	GSList *cert_reply;
+};
+
+struct scvp_response_cli {
+	time_t produced_at;
+	unsigned int response_status;
+	char *error_msg;
 	unsigned int val_poly;
 	GSList *cert_reply;
 };
@@ -126,7 +135,9 @@ struct scvp_request *request_alloc(void);
 void request_free(struct scvp_request *rqst);
 struct scvp_cert_reply *cert_reply_alloc(void);
 void cert_reply_free(struct scvp_cert_reply *cert_reply);
-struct scvp_response *response_alloc(void);
-void response_free(struct scvp_response *resp);
+struct scvp_response_srv *response_srv_alloc(void);
+void response_srv_free(struct scvp_response_srv *resp);
+struct scvp_response_cli *response_cli_alloc(void);
+void response_cli_free(struct scvp_response_cli *resp);
 
 #endif /* SCVP_DEFS_H */

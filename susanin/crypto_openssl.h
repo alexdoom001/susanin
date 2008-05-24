@@ -1,7 +1,7 @@
-#ifndef OPENSSL_THREADS_H
-#define OPENSSL_THREADS_H
+#ifndef CRYPTO_OPENSSL_H
+#define CRYPTO_OPENSSL_H
 
 void openssl_init(void);
 void openssl_deinit(void);
 
-#endif /* OPENSSL_THREADS_H */
+#endif /* CRYPTO_OPENSSL_H */

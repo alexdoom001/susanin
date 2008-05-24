@@ -17,232 +17,45 @@
 #include "cache.h"
 #include "config.h"
 #include "logger.h"
+#include "update_chain.h"
 
-static char **get_ca_issuers(X509 *cert, int *str_num)
+enum error_code
 {
-	int i;
-	AUTHORITY_INFO_ACCESS *info;
-	ACCESS_DESCRIPTION *ad;
-	char **str = NULL, **ptr;
+	E_SUCCESS = 0,
+	E_EE_CERT,
+	E_INTER_CERT,
+	E_CACHE_INT,
+	E_CACHE_ANCHOR,
+	E_OPENSSL_INT,
+	E_VERIFY_TYPE,
+	E_PATH_BUILD,
+	E_POLICY_PARAMS,
+	E_OCSP_CHECK,
+	E_CRL_CHECK,
+	E_PATH_CHECK,
+	E_POLICY_CHECK,
+	E_TRUST_ANCHOR,
+	E_MAX
+};
 
-	info = X509_get_ext_d2i(cert, NID_info_access, NULL, NULL);
-	if (!info)
-		return NULL;
-	*str_num = 0;
-	for (i = 0; i < sk_ACCESS_DESCRIPTION_num(info); i++) {
-		ad = sk_ACCESS_DESCRIPTION_value(info, i);
-		if (OBJ_obj2nid(ad->method) == NID_ad_ca_issuers) {
-			if (ad->location->type == GEN_URI) {
-				(*str_num)++;
-				ptr = str;
-				if (!(str = realloc(ptr ,sizeof(char*) * (*str_num)))) {
-					free(ptr);
-					return NULL;
-				}
-				str[(*str_num) - 1] = strdup((char*)ad->location->d.ia5->data);
-			}
-		}
-	}
-	AUTHORITY_INFO_ACCESS_free(info);
-	return str;
-}
+static const char *error_message[E_MAX] = {
+	"No error",
+	"Failed to retrieve SCVP EE certificate",
+	"Failed to retrieve SCVP intermediate certificate",
+	"Certificate cache internal error",
+	"Failed to retrieve anchor certificate from cache",
+	"OpenSSL internal error",
+	"Undefined verify type for PKC path build",
+	"Certificate path build failed",
+	"Failed to set certificate path policy parameters",
+	"Certificate path OCSP revocation check failed",
+	"Certificate path revocation check failed",
+	"Certificate path validation failed",
+	"Certificate path policy check failed",
+	"Chain doesn't include trust anchor certificate"
+};
 
-static char **get_crldps(X509 *cert, int *str_num)
-{
-	int i, j;
-	DIST_POINT *dp;
-	GENERAL_NAME *gen;
-	char **str = NULL, **ptr;
-
-	*str_num = 0;
-	for (i = 0; i < sk_DIST_POINT_num(cert->crldp); i++) {
-	  dp = sk_DIST_POINT_value(cert->crldp, i);
-	  if (!dp->distpoint)
-	  	continue;
-	  for (j = 0; j < sk_GENERAL_NAME_num(dp->distpoint->name.fullname); j++) {
-	    gen = sk_GENERAL_NAME_value(dp->distpoint->name.fullname, j);
-	    if (gen->type == GEN_URI) {
-	    	(*str_num)++;
-	    	ptr = str;
-	    	if (!(str = realloc(ptr ,sizeof(char*) * (*str_num)))) {
-	    		free(ptr);
-				return NULL;
-	    	}
-	    	str[(*str_num) - 1] = strdup((char*)gen->d.ia5->data);
-	    }
-	  }
-	}
-    return str;
-}
-
-char* curl_load_file(const char* url)
-{
-	int err = 1, fd;
-	char *tmp_file;
-	FILE *file = NULL;
-	CURL *curl = NULL;
-
-	if (!(tmp_file = g_build_filename(cfg.tmp_path, "susaninXXXXXXXX", NULL)))
-		return NULL;
-	if ((fd = mkstemp(tmp_file)) == -1)
-		goto end;
-	if (!(file = fdopen(fd, "wb")))
-		goto end;
-	if (!(curl = curl_easy_init()))
-		goto end;
-	if ((curl_easy_setopt(curl, CURLOPT_URL, url)) != CURLE_OK)
-		goto end;
-	if ((curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, NULL)) != CURLE_OK)
-		goto end;
-	if ((curl_easy_setopt(curl, CURLOPT_WRITEDATA, file)) != CURLE_OK)
-		goto end;
-	if ((curl_easy_perform(curl)) != CURLE_OK)
-		goto end;
-	err = 0;
-
-end:
-	curl_easy_cleanup(curl);
-	fclose(file);
-	if (!err)
-		return tmp_file;
-	g_free(tmp_file);
-	return NULL;
-}
-
-static void load_ca(X509 *cert, STACK_OF(X509) *uchain, int depth)
-{
-	int i;
-	BIO *bio;
-	X509 *cert_tmp = NULL;
-	EVP_PKEY *pkey;
-	char *tmp_file = NULL;
-	char **ca_issuers = NULL;
-	int ca_issuers_num;
-
-	if (depth > 100)
-		return;
-	if (!(bio = BIO_new(BIO_s_file())))
-		return;
-	if (!(ca_issuers = get_ca_issuers(cert, &ca_issuers_num)))
-		goto end;
-	for (i = 0; i < ca_issuers_num; i++) {
-		if (!(tmp_file = curl_load_file(ca_issuers[i]))) {
-			goto end;
-		}
-		if (!BIO_read_filename(bio, tmp_file))
-			goto end;
-		if (!(cert_tmp = PEM_read_bio_X509_AUX(bio, NULL, NULL, NULL)))
-			goto end;
-		remove(tmp_file);
-		free(tmp_file);
-		tmp_file = NULL;
-		if (!(pkey = X509_get_pubkey(cert_tmp)))
-			goto end;
-		if (!X509_verify(cert_tmp, pkey)) {
-			EVP_PKEY_free(pkey);
-			goto end;
-		}
-		EVP_PKEY_free(pkey);
-		if (!sk_X509_push(uchain, cert_tmp))
-			goto end;
-		load_ca(cert, uchain, depth + 1);
-		X509_free(cert_tmp);
-		cert_tmp = NULL;
-	}
-
-end:
-	BIO_free(bio);
-	if (ca_issuers) {
-		for (i = 0; i < ca_issuers_num; i++)
-			free(ca_issuers[i]);
-		free(ca_issuers);
-	}
-	if (tmp_file) {
-		remove(tmp_file);
-		free(tmp_file);
-	}
-	X509_free(cert_tmp);
-}
-
-static void load_ca_issuers(STACK_OF(X509) *uchain, int depth)
-{
-	int i;
-	X509 *cert;
-
-	if (!uchain)
-		return;
-	for (i = 0; i < sk_X509_num(uchain); i++) {
-		if (!(cert = sk_X509_value(uchain, i)))
-			return;
-		load_ca(cert, uchain, depth);
-	}
-}
-
-static int update_crl(const char* crl_url, X509_STORE_CTX *store_ctx, EVP_PKEY *pkey)
-{
-	int err = 1;
-	char *tmp_file;
-	BIO *bio;
-	X509_CRL *crl = NULL;
-
-	if (!(tmp_file = curl_load_file(crl_url))) {
-		log_msg(LOG_DEBUG, "cURL failed to load CRL %s", crl_url);
-		return 1;
-	}
-	if (!(bio = BIO_new(BIO_s_file())))
-		goto end;
-	if (!BIO_read_filename(bio, tmp_file))
-		goto end;
-	if (!(crl = PEM_read_bio_X509_CRL(bio, NULL, NULL, NULL))) {
-		log_msg(LOG_DEBUG, "Failed to process loaded CRL");
-		goto end;
-	}
-	if (!X509_CRL_verify(crl, pkey)) {
-		log_msg(LOG_DEBUG, "Failed to verify CRL");
-		goto end;
-	}
-	if (cache_crl(store_ctx, crl, cfg.crl_path)) {
-		log_msg(LOG_DEBUG, "Failed to cache CRL");
-		goto end;
-	}
-	err = 0;
-
-end:
-	remove(tmp_file);
-	free(tmp_file);
-	BIO_free(bio);
-	X509_CRL_free(crl);
-	return err;
-}
-
-static int update_chain_crl(X509_STORE_CTX *store_ctx)
-{
-	int i, j;
-	X509 *cert;
-	EVP_PKEY *pkey;
-	char **crldps;
-	int crldps_num;
-
-	for (i = sk_X509_num(store_ctx->chain) - 1; i >= 0; i--) {
-		if (!(cert = sk_X509_value(store_ctx->chain, i)))
-			continue;
-		if (!(crldps = get_crldps(cert, &crldps_num)))
-			continue;
-		if (!(pkey = X509_get_pubkey(cert))) {
-			for (j = 0; j < crldps_num; j++)
-				free(crldps[j]);
-			free(crldps);
-			continue;
-		}
-		for (j = 0; j < crldps_num; j++) {
-			update_crl(crldps[j], store_ctx, pkey);
-			free(crldps[j]);
-		}
-		EVP_PKEY_free(pkey);
-		free(crldps);
-	}
-	return 1;
-}
+extern struct config cfg;
 
 static inline int verify_stub(X509_STORE_CTX *store_ctx)
 {
@@ -256,11 +69,14 @@ static inline int revocation_stub(X509_STORE_CTX *ctx)
 
 static int verify_callback(int preverify_ok, X509_STORE_CTX *store_ctx)
 {
-	int err;
+	int err, *crl_values;
 
 	if (!preverify_ok) {
 		err = X509_STORE_CTX_get_error(store_ctx);
-		if (err == X509_V_ERR_UNABLE_TO_GET_CRL && (cfg.crl_values & CHECK_AVAILABLE))
+
+		crl_values = X509_STORE_CTX_get_ex_data(store_ctx, 0);
+
+		if (err == X509_V_ERR_UNABLE_TO_GET_CRL && (*crl_values & CHECK_AVAILABLE))
 			preverify_ok = 1;
 		log_msg(LOG_DEBUG, "verify error: %d (%s)", err, X509_verify_cert_error_string(err));
 	}
@@ -293,7 +109,7 @@ static X509_VERIFY_PARAM *cert_policy_values(const struct scvp_request *rqst)
 			goto end;
 		}
 		X509_VERIFY_PARAM_add0_policy(param, obj);
-		X509_VERIFY_PARAM_set_depth(param, 100);
+		X509_VERIFY_PARAM_set_depth(param, MAX_CERT_CHAIN_DEPTH);
 		return param;
 	}
 
@@ -304,7 +120,7 @@ static X509_VERIFY_PARAM *cert_policy_values(const struct scvp_request *rqst)
 		}
 		X509_VERIFY_PARAM_add0_policy(param, obj);
 	}
-	X509_VERIFY_PARAM_set_depth(param, 100);
+	X509_VERIFY_PARAM_set_depth(param, MAX_CERT_CHAIN_DEPTH);
 	return param;
 
 end:
@@ -334,9 +150,9 @@ static void chain_free(STACK_OF(X509) *uchain)
 	sk_X509_free(uchain);
 }
 
-static int build_pkc_path(X509 *cert, X509 *anchor, STACK_OF(X509) *uchain, const struct scvp_request *scvp_rqst)
+static enum error_code build_pkc_path(X509 *cert, X509 *anchor, STACK_OF(X509) *uchain, const struct scvp_request *scvp_rqst)
 {
-	int err = 1, flags = 0;
+	enum error_code err = E_SUCCESS;
 	X509_STORE *store;
 	X509_LOOKUP *lookup;
 	X509_STORE_CTX *store_ctx = NULL;
@@ -345,28 +161,28 @@ static int build_pkc_path(X509 *cert, X509 *anchor, STACK_OF(X509) *uchain, cons
 	X509_VERIFY_PARAM *param = NULL;
 
 	if (!(store = X509_STORE_new())) {
-		log_msg(LOG_DEBUG, "OpenSSL X509_STORE_new() failed");
-		return 1;
+		err = E_OPENSSL_INT;
+		goto end;
 	}
 	if (!(lookup = X509_STORE_add_lookup(store, X509_LOOKUP_hash_dir()))) {
-		log_msg(LOG_DEBUG, "OpenSSL X509_STORE_add_lookup() failed");
+		err = E_OPENSSL_INT;
 		goto end;
 	}
 	if (!X509_LOOKUP_add_dir(lookup, cfg.ca_path, X509_FILETYPE_PEM)) {
-		log_msg(LOG_DEBUG, "OpenSSL X509_LOOKUP_add_dir() failed");
+		err = E_OPENSSL_INT;
 		goto end;
 	}
 	if (!X509_LOOKUP_add_dir(lookup, cfg.crl_path, X509_FILETYPE_PEM)) {
-		log_msg(LOG_DEBUG, "OpenSSL X509_LOOKUP_add_dir() failed");
+		err = E_OPENSSL_INT;
 		goto end;
 	}
 	if (!(store_ctx = X509_STORE_CTX_new())) {
-		log_msg(LOG_DEBUG, "OpenSSL X509_STORE_CTX_new() failed");
+		err = E_OPENSSL_INT;
 		goto end;
 	}
 
 	if(!X509_STORE_CTX_init(store_ctx, store, cert, uchain)) {
-		log_msg(LOG_DEBUG, "OpenSSL X509_STORE_CTX_init() failed");
+		err = E_OPENSSL_INT;
 		goto end;
 	}
 
@@ -382,30 +198,48 @@ static int build_pkc_path(X509 *cert, X509 *anchor, STACK_OF(X509) *uchain, cons
 		break;
 	case BUILD_STATUS_CHECKED_PKC_PATH:
 		internal_verify = store_ctx->verify;
-		store_ctx->verify = update_chain_crl;
+		store_ctx->verify = update_cert_chain_crl;
 		store_ctx->verify_cb = verify_callback;
 		break;
 	default:
-		log_msg(LOG_DEBUG, "Undefined verify type for PKC path build");
+		err = E_VERIFY_TYPE;
 		goto end;
 	}
 
 	X509_STORE_CTX_set_flags(store_ctx, X509_V_FLAG_X509_STRICT);
 	if (X509_verify_cert(store_ctx) <= 0) {
-		log_msg(LOG_DEBUG, "Certificate PKC path verify failed");
+		err = E_PATH_BUILD;
 		goto end;
 	}
 
 	if (anchor)
 		if (check_anchor_certificate(store_ctx, anchor)) {
-			log_msg(LOG_DEBUG, "Chain doesn't include trust anchor certificate");
+			err = E_TRUST_ANCHOR;
 			goto end;
 		}
 
 	if (scvp_rqst->checks == BUILD_STATUS_CHECKED_PKC_PATH) {
+		int flags = 0, crl_values;
+		X509 *last_cert;
+
+		last_cert = sk_X509_value(store_ctx->chain, sk_X509_num(store_ctx->chain) - 1);
+		if (last_cert == NULL) {
+			err = E_OPENSSL_INT;
+			goto end;
+		}
+		crl_values = get_cert_values(last_cert, CRL_VALUES);
+		if (!X509_STORE_CTX_set_ex_data(store_ctx, 0, &crl_values)) {
+			err = E_OPENSSL_INT;
+			goto end;
+		}
+		if (crl_values & CHECK_PEER)
+			flags |= X509_V_FLAG_CRL_CHECK;
+		else if (crl_values & CHECK_ALL)
+			flags |= X509_V_FLAG_CRL_CHECK | X509_V_FLAG_CRL_CHECK_ALL;
+
 		flags |= X509_V_FLAG_POLICY_CHECK;
 		if (!(param = cert_policy_values(scvp_rqst))) {
-			log_msg(LOG_DEBUG, "Failed to set certificate path policy parameters");
+			err = E_POLICY_PARAMS;
 			goto end;
 		}
 		X509_STORE_CTX_set0_param(store_ctx, param);
@@ -418,31 +252,26 @@ static int build_pkc_path(X509 *cert, X509 *anchor, STACK_OF(X509) *uchain, cons
 		flags |= X509_V_FLAG_X509_STRICT;
 		flags |= X509_V_FLAG_USE_DELTAS;
 		flags |= X509_V_FLAG_EXTENDED_CRL_SUPPORT;
-		if (cfg.crl_values & CHECK_PEER)
-			flags |= X509_V_FLAG_CRL_CHECK;
-		else if (cfg.crl_values & CHECK_ALL)
-			flags |= X509_V_FLAG_CRL_CHECK | X509_V_FLAG_CRL_CHECK_ALL;
 		X509_STORE_CTX_set_flags(store_ctx, flags);
 
 		if (check_revocation_ocsp(store_ctx)) {
-			log_msg(LOG_DEBUG, "Certificate path OCSP revocation check failed");
+			err = E_OCSP_CHECK;
 			goto end;
 		}
 		if (!check_revocation(store_ctx)) {
-			log_msg(LOG_DEBUG, "Certificate path revocation check failed");
+			err = E_CRL_CHECK;
 			goto end;
 		}
 		if (!internal_verify(store_ctx)) {
-			log_msg(LOG_DEBUG, "Certificate path validate failed");
+			err = E_PATH_CHECK;
 			goto end;
 		}
 		if (flags & X509_V_FLAG_POLICY_MASK)
 			if (!store_ctx->check_policy(store_ctx)) {
-				log_msg(LOG_DEBUG, "Certificate path validate failed");
+				err = E_POLICY_CHECK;
 				goto end;
 			}
 	}
-	err = 0;
 	cache_chain(store_ctx->chain);
 
 end:
@@ -451,26 +280,31 @@ end:
 	return err;
 }
 
-struct scvp_response *create_scvp_response(struct scvp_request *rqst, int error)
+struct scvp_response_srv *create_scvp_response(struct scvp_request *rqst, enum error_code error)
 {
-	struct scvp_response *resp;
+	struct scvp_response_srv *resp;
 	struct scvp_cert_reply *cert_reply;
 
-	if (!(resp = response_alloc()))
+	if (!(resp = response_srv_alloc()))
 		return NULL;
 	if (!(cert_reply = cert_reply_alloc()))
 		goto end;
 
-	cert_reply->cert = (struct scvp_cert_der*)rqst->queried_certs->data;
-	rqst->queried_certs = g_slist_remove(rqst->queried_certs, rqst->queried_certs->data);
-	g_slist_free(rqst->queried_certs);
-	rqst->queried_certs = NULL;
+	if (rqst->queried_certs) {
+		cert_reply->cert = (struct scvp_cert_der*)rqst->queried_certs->data;
+		rqst->queried_certs = g_slist_remove(rqst->queried_certs, rqst->queried_certs->data);
+		g_slist_free(rqst->queried_certs);
+		rqst->queried_certs = NULL;
+	}
 
 	cert_reply->reply_checks = rqst->checks;
 	time(&cert_reply->reply_val_time);
 
-	if (error)
+	if (error) {
 		cert_reply->reply_status = CERT_PATH_NOT_VALID;
+		if (error > 0 && error < E_MAX)
+			resp->error_msg = error_message[error];
+	}
 	else
 		cert_reply->reply_status = SUCCESS;
 
@@ -481,7 +315,7 @@ struct scvp_response *create_scvp_response(struct scvp_request *rqst, int error)
 	return resp;
 
 end:
-	response_free(resp);
+	response_srv_free(resp);
 	return NULL;
 }
 
@@ -489,12 +323,11 @@ extern struct scvp_proto_ctx *scvp_ctx;
 
 unsigned char *process_scvp_request(const unsigned char *rqst_data, int rqst_len, int *resp_len)
 {
-	int path_err, ret;
+	enum error_code err = E_SUCCESS;
 	struct scvp_request *scvp_rqst;
-	struct scvp_response *scvp_resp = NULL;
+	struct scvp_response_srv *scvp_resp = NULL;
 	GSList *iterator;
 	struct scvp_cert_der *cert_der;
-	struct scvp_cert_ref *cert_ref;
 	X509 *cert = NULL, *anchor = NULL, *cert_tmp;
 	STACK_OF(X509) *uchain = NULL;
 	unsigned char *resp_data = NULL, *ptr;
@@ -505,18 +338,18 @@ unsigned char *process_scvp_request(const unsigned char *rqst_data, int rqst_len
 	}
 
 	if (!scvp_rqst->queried_certs) {
-		log_msg(LOG_DEBUG, "Failed to retrieve SCVP request certificate");
+		err = E_EE_CERT;
 		goto end;
 	}
 	cert_der = (struct scvp_cert_der*)scvp_rqst->queried_certs->data;
 	ptr = cert_der->cert;
 	if (!(cert = d2i_X509(NULL, (const unsigned char**)&ptr, cert_der->cert_len))) {
-		log_msg(LOG_DEBUG, "Failed to decode SCVP request certificate");
+		err = E_EE_CERT;
 		goto end;
 	}
 
 	if (!(uchain = sk_X509_new_null())) {
-		log_msg(LOG_DEBUG, "Failed alloc untrusted chain");
+		err = E_OPENSSL_INT;
 		goto end;
 	}
 	if (scvp_rqst->inter_certs) {
@@ -525,51 +358,46 @@ unsigned char *process_scvp_request(const unsigned char *rqst_data, int rqst_len
 			cert_der = (struct scvp_cert_der*)iterator->data;
 			ptr = cert_der->cert;
 			if (!(cert_tmp = d2i_X509(NULL, (const unsigned char**)&ptr, cert_der->cert_len))) {
-				log_msg(LOG_DEBUG, "Failed to decode SCVP untrusted certificate");
+				err = E_INTER_CERT;
 				goto end;
 			}
 			if (!sk_X509_push(uchain, cert_tmp)) {
 				X509_free(cert_tmp);
+				err = E_OPENSSL_INT;
 				goto end;
 			}
 		}
 	}
-	load_ca(cert, uchain, 100);
-	load_ca_issuers(uchain, 100);
+	load_ca(cert, uchain, MAX_CERT_CHAIN_DEPTH);
+	load_ca_issuers(uchain, MAX_CERT_CHAIN_DEPTH);
 
 	if (scvp_rqst->trust_anchors) {
+		struct scvp_cert_ref *cert_ref;
+		int ret;
+
 		cert_ref = (struct scvp_cert_ref*)scvp_rqst->trust_anchors->data;
-		if ((ret = check_cached_cert_ref(cert_ref, cfg.ca_path, &anchor)) == -1) {
-			log_msg(LOG_ERR, "Certificate cache error");
-			goto end;
-		}
-		if (ret == 0) {
-			log_msg(LOG_DEBUG, "Failed to retrieve anchor certificate from cache");
-			goto end;
-		}
-	}
-
-	if (!(scvp_rqst->checks == BUILD_PKC_PATH || scvp_rqst->checks == BUILD_VALID_PKC_PATH ||
-			scvp_rqst->checks == BUILD_STATUS_CHECKED_PKC_PATH)) {
-		log_msg(LOG_DEBUG, "Undefined verify type for PKC path build");
-		goto end;
-	}
-
-	path_err = build_pkc_path(cert, anchor, uchain, scvp_rqst);
-	if(!(scvp_resp = create_scvp_response(scvp_rqst, path_err))) {
-		log_msg(LOG_DEBUG, "Failed to create scvp response");
-		goto end;
-	}
-	if (!(resp_data = pack_scvp_response(scvp_ctx, scvp_resp, resp_len))) {
-		log_msg(LOG_DEBUG, "Failed to create SCVP response");
-		goto end;
+		if ((ret = check_cached_cert_ref(cert_ref, cfg.ca_path, &anchor)) == -1)
+			err = E_CACHE_INT;
+		if (ret == 0)
+			err = E_CACHE_ANCHOR;
 	}
 
 end:
+	if (err == E_SUCCESS)
+		err = build_pkc_path(cert, anchor, uchain, scvp_rqst);
+	if(!(scvp_resp = create_scvp_response(scvp_rqst, err))) {
+		log_msg(LOG_DEBUG, "Failed to create SCVP response");
+		goto end;
+	}
+	if (!(resp_data = pack_scvp_response(scvp_ctx, scvp_resp, resp_len))) {
+		log_msg(LOG_DEBUG, "Failed to pack SCVP response");
+		goto end;
+	}
+
 	X509_free(cert);
 	X509_free(anchor);
 	chain_free(uchain);
 	request_free(scvp_rqst);
-	response_free(scvp_resp);
+	response_srv_free(scvp_resp);
 	return resp_data;
 }

@@ -198,8 +198,8 @@ static void update_links(const char *target_dir, int flags)
 {
 	GDir *dir;
 	BIO *bio;
-	const gchar* file = NULL;
-	gchar* file_path;
+	const gchar *file = NULL;
+	gchar *file_path;
 
 	if (!(dir = g_dir_open(target_dir, 0, NULL))) {
 		printf("Failed to open directory %s\n", target_dir);
@@ -245,15 +245,15 @@ int main(int argc, char **argv)
 		printf("CRL - CRL files\n");
 		return 1;
 	}
-	if (!strcmp(argv[2], "X509"))
+	if (strcmp(argv[2], "X509") == 0)
 		flags = UPDATE_X509;
-	else if (!strcmp(argv[2], "CRL"))
+	else if (strcmp(argv[2], "CRL") == 0)
 		flags = UPDATE_CRL;
 	else {
 		printf("Unknown rehash type\n");
 		return 1;
 	}
-	if (argc == 4 && !strcmp(argv[3], "scvplinks"))
+	if (argc == 4 && (strcmp(argv[3], "scvplinks") == 0))
 		flags |= SCVP_LINKS;
 	update_links(argv[1], flags);
 	return 0;

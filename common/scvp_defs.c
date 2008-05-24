@@ -86,9 +86,9 @@ void cert_reply_free(struct scvp_cert_reply *cert_reply)
 	free(cert_reply);
 }
 
-struct scvp_response *response_alloc(void)
+struct scvp_response_srv *response_srv_alloc(void)
 {
-	struct scvp_response *resp;
+	struct scvp_response_srv *resp;
 
 	if (!(resp = malloc(sizeof(*resp))))
 		return NULL;
@@ -96,7 +96,29 @@ struct scvp_response *response_alloc(void)
 	return resp;
 }
 
-void response_free(struct scvp_response *resp)
+void response_srv_free(struct scvp_response_srv *resp)
+{
+	GSList *iterator;
+
+	if (!resp)
+		return;
+	for(iterator = resp->cert_reply; iterator; iterator = g_slist_next(iterator))
+		cert_reply_free((struct scvp_cert_reply *)iterator->data);
+	g_slist_free(resp->cert_reply);
+	free(resp);
+}
+
+struct scvp_response_cli *response_cli_alloc(void)
+{
+	struct scvp_response_cli *resp;
+
+	if (!(resp = malloc(sizeof(*resp))))
+		return NULL;
+	memset(resp, 0, sizeof(*resp));
+	return resp;
+}
+
+void response_cli_free(struct scvp_response_cli *resp)
 {
 	GSList *iterator;
 
