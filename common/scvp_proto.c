@@ -1,232 +1,104 @@
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <time.h>
 #include <glib.h>
 #include <libtasn1.h>
 
+#include "scvp_defs.h"
 #include "scvp_proto.h"
 #include "channel.h"
 
-static char error_description[ASN1_MAX_ERROR_DESCRIPTION_SIZE];
+#include "asn1_defs.c"
+
+struct scvp_proto_ctx {
+	asn1_node asn1_defs;
+};
 
 #define ASN1_ERR(err) if (err != 0) { goto end; }
 
-struct oid_table check_oid[] = {
-	{"id-stc-build-pkc-path", "",                                   BUILD_PKC_PATH},
-	{"id-stc-build-valid-pkc-path", "",                             BUILD_VALID_PKC_PATH},
-	{"id-stc-build-status-checked-pkc-path", "",                    BUILD_STATUS_CHECKED_PKC_PATH},
-	{"id-stc-build-aa-path", "",                                    BUILD_AA_PATH},
-	{"id-stc-build-valid-aa-path", "",                              BUILD_VALID_AA_PATH},
-	{"id-stc-build-status-checked-aa-path", "",                     BUILD_STATUS_CHECKED_AA_PATH},
-	{"id-stc-status-check-ac-and-build-status-checked-aa-path", "", STATUS_CHECK_AC_AND_BUILD_STATUS_CHECKED_AA_PATH}
+static const struct oid_table check_oid[] = {
+	{"1.3.6.1.5.5.7.17.1", BUILD_PKC_PATH},                                     /* id-stc-build-pkc-path */
+	{"1.3.6.1.5.5.7.17.2", BUILD_VALID_PKC_PATH},                               /* id-stc-build-valid-pkc-path */
+	{"1.3.6.1.5.5.7.17.3", BUILD_STATUS_CHECKED_PKC_PATH},                      /* id-stc-build-status-checked-pkc-path */
+	{"1.3.6.1.5.5.7.17.4", BUILD_AA_PATH},                                      /* id-stc-build-aa-path */
+	{"1.3.6.1.5.5.7.17.5", BUILD_VALID_AA_PATH},                                /* id-stc-build-valid-aa-path */
+	{"1.3.6.1.5.5.7.17.6", BUILD_STATUS_CHECKED_AA_PATH},                       /* id-stc-build-status-checked-aa-path */
+	{"1.3.6.1.5.5.7.17.7", STATUS_CHECK_AC_AND_BUILD_STATUS_CHECKED_AA_PATH}    /* id-stc-status-check-ac-and-build-status-checked-aa-path */
 };
 
-struct oid_table alg_err_oid[] = {
-	{"id-bvae-expired", "",           EXPIRED},
-	{"id-bvae-not-yet-valid", "",     NOT_YET_VALID},
-	{"id-bvae-wrongTrustAnchor", "",  WRONG_TRUST_ANCHOR},
-	{"id-bvae-noValidCertPath", "",   NO_VALID_CERT_PATH},
-	{"id-bvae-revoked", "",           REVOKED},
-	{"id-bvae-invalidKeyPurpose", "", INVALID_KEY_PURPOSE},
-	{"id-bvae-invalidKeyUsage", "",   INVALID_KEY_USAGE},
-	{"id-bvae-invalidCertPolicy", "", INVALID_CERT_POLICY}
+static const struct oid_table alg_err_oid[] = {
+	{"1.3.6.1.5.5.7.19.3.1", EXPIRED},                                          /* id-bvae-expired */
+	{"1.3.6.1.5.5.7.19.3.2", NOT_YET_VALID},                                    /* id-bvae-not-yet-valid */
+	{"1.3.6.1.5.5.7.19.3.3", WRONG_TRUST_ANCHOR},                               /* id-bvae-wrongTrustAnchor */
+	{"1.3.6.1.5.5.7.19.3.4", NO_VALID_CERT_PATH},                               /* id-bvae-noValidCertPath */
+	{"1.3.6.1.5.5.7.19.3.5", REVOKED},                                          /* id-bvae-revoked */
+	{"1.3.6.1.5.5.7.19.3.9", INVALID_KEY_PURPOSE},                              /* id-bvae-invalidKeyPurpose */
+	{"1.3.6.1.5.5.7.19.3.10", INVALID_KEY_USAGE},                               /* id-bvae-invalidKeyUsage */
+	{"1.3.6.1.5.5.7.19.3.11", INVALID_CERT_POLICY}                              /* id-bvae-invalidCertPolicy */
 };
 
-struct oid_table hash_alg_oid[] = {
-	{"sha-1", "", HASH_ALG_SHA1}
+static const struct oid_table hash_alg_oid[] = {
+	{"1.3.14.3.2.26", HASH_ALG_SHA1}                                            /* sha-1 */
 };
 
-struct oid_table val_poly_oid[] = {
-	{"id-svp-defaultValPolicy", "", VAL_POLY_DEFAULT}
+static const struct oid_table val_poly_oid[] = {
+	{"1.3.6.1.5.5.7.19.1", VAL_POLY_DEFAULT}                                    /* id-svp-defaultValPolicy */
 };
 
-struct scvp_cert_der *cert_der_alloc(void)
-{
-	struct scvp_cert_der *cert;
-
-	if (!(cert = malloc(sizeof(*cert))))
-		return NULL;
-	memset(cert, 0, sizeof(*cert));
-	return cert;
-}
-
-void cert_der_free(struct scvp_cert_der *cert)
-{
-	if (!cert)
-		return;
-	free(cert->cert);
-	free(cert);
-}
-
-struct scvp_cert_ref *cert_ref_alloc(void)
-{
-	struct scvp_cert_ref *cert;
-
-	if (!(cert = malloc(sizeof(*cert))))
-		return NULL;
-	memset(cert, 0, sizeof(*cert));
-	return cert;
-}
-
-void cert_ref_free(struct scvp_cert_ref *cert)
-{
-	free(cert);
-}
-
-struct scvp_request *request_alloc(void)
-{
-	struct scvp_request *rqst;
-
-	if (!(rqst = malloc(sizeof(*rqst))))
-		return NULL;
-	memset(rqst, 0, sizeof(*rqst));
-	return rqst;
-}
-
-void request_free(struct scvp_request *rqst)
-{
-	GSList *iterator;
-
-	if (!rqst)
-		return;
-	for(iterator = rqst->trust_anchors; iterator; iterator = g_slist_next(iterator))
-		cert_ref_free((struct scvp_cert_ref *)iterator->data);
-	g_slist_free(rqst->trust_anchors);
-	for(iterator = rqst->queried_certs; iterator; iterator = g_slist_next(iterator))
-		cert_der_free((struct scvp_cert_der *)iterator->data);
-	g_slist_free(rqst->queried_certs);
-	for(iterator = rqst->inter_certs; iterator; iterator = g_slist_next(iterator))
-		cert_der_free((struct scvp_cert_der *)iterator->data);
-	g_slist_free(rqst->inter_certs);
-	for(iterator = rqst->user_poly_set; iterator; iterator = g_slist_next(iterator))
-		free(iterator->data);
-	g_slist_free(rqst->user_poly_set);
-	free(rqst);
-}
-
-struct scvp_cert_reply *cert_reply_alloc(void)
-{
-	struct scvp_cert_reply *cert_reply;
-
-	if (!(cert_reply = malloc(sizeof(*cert_reply))))
-		return NULL;
-	memset(cert_reply, 0, sizeof(*cert_reply));
-	return cert_reply;
-}
-
-void cert_reply_free(struct scvp_cert_reply *cert_reply)
-{
-	if (!cert_reply)
-		return;
-	cert_der_free(cert_reply->cert);
-	free(cert_reply);
-}
-
-struct scvp_response *response_alloc(void)
-{
-	struct scvp_response *resp;
-
-	if (!(resp = malloc(sizeof(*resp))))
-		return NULL;
-	memset(resp, 0, sizeof(*resp));
-	return resp;
-}
-
-void response_free(struct scvp_response *resp)
-{
-	GSList *iterator;
-
-	if (!resp)
-		return;
-	for(iterator = resp->cert_reply; iterator; iterator = g_slist_next(iterator))
-		cert_reply_free((struct scvp_cert_reply *)iterator->data);
-	g_slist_free(resp->cert_reply);
-	free(resp);
-}
-
-static int oid_table_initialize(asn1_node *asn1_defs, struct oid_table *oid_list, int list_len)
-{
-	int err, i, len;
-	char str[64];
-
-	for (i = 0; i < list_len; i++) {
-		sprintf(str, "SCVP.%s", oid_list[i].oid_name);
-		len = sizeof(oid_list[i].oid_str) - 1;
-		if ((err = asn1_read_value(*asn1_defs, str, oid_list[i].oid_str, &len)))
-			return err;
-	}
-	return 0;
-}
-
-static char *get_oid_str_by_flag(struct oid_table *oid_list, int list_len, unsigned int oid_flag)
+static const char *get_oid_str_by_flag(const struct oid_table *table, int table_len, unsigned int flag)
 {
 	int i;
 
-	for (i = 0; i < list_len; i++)
-		if (oid_flag == oid_list[i].oid_flag)
-			return oid_list[i].oid_str;
+	for (i = 0; i < table_len; i++)
+		if (flag == table[i].flag)
+			return table[i].str;
 	return NULL;
 }
 
-static unsigned int get_oid_flag_by_str(struct oid_table *oid_list, int list_len, char *oid_str)
+static unsigned int get_oid_flag_by_str(const struct oid_table *table, int table_len, const char *str)
 {
 	int i;
 
-	for (i = 0; i < list_len; i++)
-		if (!strcmp(oid_str, oid_list[i].oid_str))
-			return oid_list[i].oid_flag;
+	for (i = 0; i < table_len; i++)
+		if (!strcmp(str, table[i].str))
+			return table[i].flag;
 	return 0;
 }
 
-void *scvp_initialize(const char *asn1_file)
+struct scvp_proto_ctx *scvp_init(void)
 {
-	int err;
-	asn1_node *asn1_defs;
+	struct scvp_proto_ctx *ctx;
 
-	if (!(asn1_defs = malloc(sizeof(*asn1_defs))))
+	if (!(ctx = malloc(sizeof(*ctx))))
 		return NULL;
-	memset(asn1_defs, 0, sizeof(*asn1_defs));
-	if ((err = asn1_parser2tree(asn1_file, asn1_defs, error_description))) {
-		free(asn1_defs);
+	memset(ctx, 0, sizeof(*ctx));
+	if (asn1_array2tree(asn1_defs_array, &ctx->asn1_defs, NULL)) {
+		free(ctx);
 		return NULL;
 	}
-
-	if (oid_table_initialize(asn1_defs, check_oid, sizeof(check_oid)/sizeof(check_oid[0])))
-		goto end;
-	if (oid_table_initialize(asn1_defs, alg_err_oid, sizeof(alg_err_oid)/sizeof(alg_err_oid[0])))
-		goto end;
-	if (oid_table_initialize(asn1_defs, hash_alg_oid, sizeof(hash_alg_oid)/sizeof(hash_alg_oid[0])))
-		goto end;
-	if (oid_table_initialize(asn1_defs, val_poly_oid, sizeof(val_poly_oid)/sizeof(val_poly_oid[0])))
-		goto end;
-	return (void*)asn1_defs;
-
-end:
-	asn1_delete_structure(asn1_defs);
-	free(asn1_defs);
-	return NULL;
+	return ctx;
 }
 
-void scvp_deinitialize(void *asn1_defs)
+void scvp_deinit(struct scvp_proto_ctx *ctx)
 {
-	asn1_node *defs = (asn1_node*)asn1_defs;
-
-	asn1_delete_structure(defs);
-	free(defs);
+	if (!ctx)
+		return;
+	asn1_delete_structure(&ctx->asn1_defs);
+	free(ctx);
 }
 
-unsigned char *pack_scvp_request(void *asn1_defs, struct scvp_request *rqst, int *rqst_len)
+unsigned char *pack_scvp_request(const struct scvp_proto_ctx *ctx, const struct scvp_request *rqst, int *rqst_len)
 {
 	int err, rqst_ver = 1;
-	asn1_node *defs = (asn1_node*)asn1_defs;
 	GSList *iterator;
 	asn1_node asn1 = NULL;
 	struct scvp_cert_der *cert_der;
 	struct scvp_cert_ref *cert_ref;
 	unsigned char *rqst_data = NULL;
-	char *str_ptr;
+	const char *str_ptr;
 
-	err = asn1_create_element(*defs, "SCVP.CVRequest", &asn1);
+	err = asn1_create_element(ctx->asn1_defs, "SCVP.CVRequest", &asn1);
 	ASN1_ERR(err);
 	err = asn1_write_value(asn1, "cvRequestVersion", &rqst_ver, 1);
 	ASN1_ERR(err);
@@ -315,11 +187,15 @@ unsigned char *pack_scvp_request(void *asn1_defs, struct scvp_request *rqst, int
 	if (!(rqst_data = malloc(SCVP_MSG_BLOCK_SIZE)))
 		goto end;
 	*rqst_len = SCVP_MSG_BLOCK_SIZE;
-	if ((err = asn1_der_coding(asn1, "", rqst_data, rqst_len, error_description))) {
+	if ((err = asn1_der_coding(asn1, "", rqst_data, rqst_len, NULL))) {
 		if (err == ASN1_MEM_ERROR) {
-			if (!(rqst_data = realloc(rqst_data, *rqst_len)))
+			unsigned char *ptr;
+
+			ptr = realloc(rqst_data, *rqst_len);
+			if (ptr == NULL)
 				goto end;
-			if ((err = asn1_der_coding(asn1, "", rqst_data, rqst_len, error_description)))
+			rqst_data = ptr;
+			if ((err = asn1_der_coding(asn1, "", rqst_data, rqst_len, NULL)))
 				goto end;
 		}
 		else
@@ -335,10 +211,9 @@ end:
 	return NULL;
 }
 
-struct scvp_request *unpack_scvp_request(void *asn1_defs, unsigned char *rqst_data, int rqst_len)
+struct scvp_request *unpack_scvp_request(const struct scvp_proto_ctx *ctx, const unsigned char *rqst_data, int rqst_len)
 {
 	int err, rqst_ver = 0, i, len, num;
-	asn1_node *defs = (asn1_node*)asn1_defs;
 	asn1_node asn1 = NULL;
 	struct scvp_request *rqst;
 	struct scvp_cert_der *cert_der;
@@ -348,9 +223,9 @@ struct scvp_request *unpack_scvp_request(void *asn1_defs, unsigned char *rqst_da
 	if (!(rqst = request_alloc()))
 		return NULL;
 
-	err = asn1_create_element(*defs, "SCVP.CVRequest", &asn1);
+	err = asn1_create_element(ctx->asn1_defs, "SCVP.CVRequest", &asn1);
 	ASN1_ERR(err);
-	if ((err = asn1_der_decoding(&asn1, rqst_data, rqst_len, error_description)))
+	if ((err = asn1_der_decoding(&asn1, rqst_data, rqst_len, NULL)))
 		goto end;
 	len = sizeof(rqst_ver);
 	err = asn1_read_value(asn1, "cvRequestVersion", &rqst_ver, &len);
@@ -441,10 +316,14 @@ struct scvp_request *unpack_scvp_request(void *asn1_defs, unsigned char *rqst_da
 	err = asn1_read_value(asn1, "query.queriedCerts.pkcRefs.?1.cert", cert_der->cert, (int*)(&cert_der->cert_len));
 	if (err != ASN1_SUCCESS) {
 		if (err == ASN1_MEM_ERROR) {
-			if (!(cert_der->cert = realloc(cert_der->cert, cert_der->cert_len))) {
+			unsigned char *ptr;
+
+			ptr = realloc(cert_der->cert, cert_der->cert_len);
+			if (ptr == NULL) {
 				cert_der_free(cert_der);
 				goto end;
 			}
+			cert_der->cert = ptr;
 			err = asn1_read_value(asn1, "query.queriedCerts.pkcRefs.?1.cert", cert_der->cert, (int*)(&cert_der->cert_len));
 			if (err != ASN1_SUCCESS) {
 				cert_der_free(cert_der);
@@ -472,10 +351,14 @@ struct scvp_request *unpack_scvp_request(void *asn1_defs, unsigned char *rqst_da
 		err = asn1_read_value(asn1, str_tmp, cert_der->cert, (int*)(&cert_der->cert_len));
 		if (err != ASN1_SUCCESS) {
 			if (err == ASN1_MEM_ERROR) {
-				if (!(cert_der->cert = realloc(cert_der->cert, cert_der->cert_len))) {
+				unsigned char *ptr;
+
+				ptr = realloc(cert_der->cert, cert_der->cert_len);
+				if (ptr == NULL) {
 					cert_der_free(cert_der);
 					goto end;
 				}
+				cert_der->cert = ptr;
 				sprintf(str_tmp, "query.intermediateCerts.?%d", i + 1);
 				err = asn1_read_value(asn1, str_tmp, cert_der->cert, (int*)(&cert_der->cert_len));
 				if (err != ASN1_SUCCESS) {
@@ -499,16 +382,16 @@ end:
 	return NULL;
 }
 
-unsigned char *pack_scvp_response(void *asn1_defs, struct scvp_response *resp, int *resp_len)
+unsigned char *pack_scvp_response(const struct scvp_proto_ctx *ctx, const struct scvp_response *resp, int *resp_len)
 {
 	int err, resp_ver = 1, config_id = 1;
-	asn1_node *defs = (asn1_node*)asn1_defs;
 	asn1_node asn1 = NULL;
 	struct scvp_cert_reply *cert_reply;
 	unsigned char *resp_data = NULL;
-	char str_tmp[64], *str_ptr;
+	char str_tmp[64];
+	const char *str_ptr;
 
-	err = asn1_create_element(*defs, "SCVP.CVResponse", &asn1);
+	err = asn1_create_element(ctx->asn1_defs, "SCVP.CVResponse", &asn1);
 	ASN1_ERR(err);
 	err = asn1_write_value(asn1, "cvResponseVersion", &resp_ver, 1);
 	ASN1_ERR(err);
@@ -558,11 +441,15 @@ unsigned char *pack_scvp_response(void *asn1_defs, struct scvp_response *resp, i
 	if (!(resp_data = malloc(SCVP_MSG_BLOCK_SIZE)))
 		goto end;
 	*resp_len = SCVP_MSG_BLOCK_SIZE;
-	if ((err = asn1_der_coding(asn1, "", resp_data, resp_len, error_description))) {
+	if ((err = asn1_der_coding(asn1, "", resp_data, resp_len, NULL))) {
 		if (err == ASN1_MEM_ERROR) {
-			if (!(resp_data = realloc(resp_data, *resp_len)))
+			unsigned char *ptr;
+
+			ptr = realloc(resp_data, *resp_len);
+			if (ptr == NULL)
 				goto end;
-			if ((err = asn1_der_coding(asn1, "", resp_data, resp_len, error_description)))
+			resp_data = ptr;
+			if ((err = asn1_der_coding(asn1, "", resp_data, resp_len, NULL)))
 				goto end;
 		}
 		else
@@ -577,22 +464,48 @@ end:
 	return NULL;
 }
 
-struct scvp_response *unpack_scvp_response(void *asn1_defs, unsigned char *resp_data, int resp_len)
+static time_t string_to_time(const char *str)
+{
+	int res;
+	struct tm t;
+
+	memset(&t, 0, sizeof(t));
+	res = sscanf(str, "%4d%2d%2d%2d%2d%2dZ", &t.tm_year, &t.tm_mon, &t.tm_mday,
+			&t.tm_hour, &t.tm_min, &t.tm_sec);
+	if (res != 6)
+		return 1;
+	if (t.tm_year < 1900)
+		return 1;
+	t.tm_year -= 1900;
+	if (t.tm_mon < 1 || t.tm_mon > 12)
+		return 1;
+	--t.tm_mon;
+	if(t.tm_mday < 1 || t.tm_mday > 31)
+		return 1;
+	if(t.tm_hour < 0 || t.tm_hour > 23)
+		return 1;
+	if (t.tm_min < 0 || t.tm_min > 59)
+		return 1;
+	if (t.tm_sec < 0 || t.tm_sec > 59)
+		return 1;
+	t.tm_isdst = -1;
+	return mktime(&t);
+}
+
+struct scvp_response *unpack_scvp_response(const struct scvp_proto_ctx *ctx, const unsigned char *resp_data, int resp_len)
 {
 	int err, rspn_ver = 0, config_id = 0, len;
-	asn1_node *defs = (asn1_node*)asn1_defs;
 	asn1_node asn1 = NULL;
 	struct scvp_response *resp;
 	struct scvp_cert_reply *cert_reply = NULL;
-	struct tm time_val;
 	char str_tmp[64];
 
 	if (!(resp = response_alloc()))
 		return NULL;
 
-	err = asn1_create_element(*defs, "SCVP.CVResponse", &asn1);
+	err = asn1_create_element(ctx->asn1_defs, "SCVP.CVResponse", &asn1);
 	ASN1_ERR(err);
-	if ((err = asn1_der_decoding(&asn1, resp_data, resp_len, error_description)))
+	if ((err = asn1_der_decoding(&asn1, resp_data, resp_len, NULL)))
 		goto end;
 	len = sizeof(rspn_ver);
 	err = asn1_read_value(asn1, "cvResponseVersion", &rspn_ver, &len);
@@ -607,8 +520,7 @@ struct scvp_response *unpack_scvp_response(void *asn1_defs, unsigned char *resp_
 	len = sizeof(str_tmp) - 1;
 	err = asn1_read_value(asn1, "producedAt", str_tmp, &len);
 	ASN1_ERR(err);
-	strptime(str_tmp, "%Y%m%d%H%M%SZ", &time_val);
-	resp->produced_at = mktime(&time_val);
+	resp->produced_at = string_to_time(str_tmp);
 	if (resp->produced_at == -1)
 		goto end;
 	len = sizeof(resp->response_status);
@@ -622,8 +534,12 @@ struct scvp_response *unpack_scvp_response(void *asn1_defs, unsigned char *resp_
 
 	if (!(cert_reply = cert_reply_alloc()))
 		goto end;
-	if (!(cert_reply->cert =cert_der_alloc()))
+	if (!(cert_reply->cert = cert_der_alloc()))
 		goto end;
+	if (!(cert_reply->cert->cert = malloc(SCVP_MSG_BLOCK_SIZE)))
+		goto end;
+	cert_reply->cert->cert_len = SCVP_MSG_BLOCK_SIZE;
+
 	len = sizeof(str_tmp) - 1;
 	err = asn1_read_value(asn1, "replyObjects.?1.replyChecks.?1.check", str_tmp, &len);
 	ASN1_ERR(err);
@@ -632,8 +548,7 @@ struct scvp_response *unpack_scvp_response(void *asn1_defs, unsigned char *resp_
 	len = sizeof(str_tmp) - 1;
 	err = asn1_read_value(asn1, "replyObjects.?1.replyValTime", str_tmp, &len);
 	ASN1_ERR(err);
-	strptime(str_tmp, "%Y%m%d%H%M%SZ", &time_val);
-	cert_reply->reply_val_time = mktime(&time_val);
+	cert_reply->reply_val_time = string_to_time(str_tmp);
 	if (cert_reply->reply_val_time == -1)
 		goto end;
 	len = sizeof(str_tmp) - 1;
@@ -642,16 +557,15 @@ struct scvp_response *unpack_scvp_response(void *asn1_defs, unsigned char *resp_
 		if (!(cert_reply->val_errors = get_oid_flag_by_str(alg_err_oid, sizeof(alg_err_oid)/sizeof(alg_err_oid[0]), str_tmp)))
 			goto end;
 
-	if (!(cert_reply->cert = cert_der_alloc()))
-		goto end;
-	if (!(cert_reply->cert->cert = malloc(SCVP_MSG_BLOCK_SIZE)))
-		goto end;
-	cert_reply->cert->cert_len = SCVP_MSG_BLOCK_SIZE;
 	err = asn1_read_value(asn1, "replyObjects.?1.cert.cert", cert_reply->cert->cert, (int*)(&cert_reply->cert->cert_len));
 	if (err != ASN1_SUCCESS) {
 		if (err == ASN1_MEM_ERROR) {
-			if (!(cert_reply->cert->cert = realloc(cert_reply->cert->cert, cert_reply->cert->cert_len)))
+			unsigned char *ptr;
+
+			ptr = realloc(cert_reply->cert->cert, cert_reply->cert->cert_len);
+			if (ptr == NULL)
 				goto end;
+			cert_reply->cert->cert = ptr;
 			err = asn1_read_value(asn1, "replyObjects.?1.cert.cert", cert_reply->cert->cert, (int*)(&cert_reply->cert->cert_len));
 			if (err != ASN1_SUCCESS)
 				goto end;

@@ -10,14 +10,15 @@
 #include <glib.h>
 
 #include "connection.h"
+#include "scvp_defs.h"
 #include "scvp_proto.h"
 #include "crypto_openssl.h"
 #include "config.h"
 #include "logger.h"
 
-void *asn1_definitions;
+struct scvp_proto_ctx *scvp_ctx;
 
-char *parse_command_line(int argc, char *argv[])
+static char *parse_command_line(int argc, char *argv[])
 {
 	char *conf_file = NULL;
 	GOptionContext *opt_ctx;
@@ -57,13 +58,13 @@ int main(int argc, char **argv) {
 
 	logger_init();
 
-	if (load_config(conf_file) != 0) {
-		log_msg(LOG_DEBUG, "Failed to read configuration file '%s'", conf_file);
+	if (!(scvp_ctx = scvp_init())) {
+		log_msg(LOG_DEBUG, "Failed init SCVP protocol");
 		return 1;
 	}
 
-	if (!(asn1_definitions = scvp_initialize("scvp.asn"))) {
-		log_msg(LOG_DEBUG, "Failed to initialize ASN.1 library\n");
+	if (load_config(conf_file) != 0) {
+		log_msg(LOG_DEBUG, "Failed to read configuration file '%s'", conf_file);
 		return 1;
 	}
 

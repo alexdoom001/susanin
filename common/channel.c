@@ -5,7 +5,7 @@
 
 #include "channel.h"
 
-int send_data(int sd, unsigned char *data, int len)
+int send_data(int sd, const unsigned char *data, int len)
 {
 	int data_left, data_len, ret;
 
@@ -30,13 +30,21 @@ int recv_data(int sd, unsigned char **data, int *len)
 	poll_fd.fd = sd;
 	poll_fd.events = POLLIN;
 
+	*data = NULL;
 	*len = 0;
 	while (1) {
+		unsigned char *newdata;
+
 		ret = poll(&poll_fd, 1, (100 * 1000));
 		if (ret == -1 || ret == 0)
 			goto end;
-		*data = realloc(*data, *len + SCVP_MSG_BLOCK_SIZE);
+		newdata = realloc(*data, *len + SCVP_MSG_BLOCK_SIZE);
+		if (newdata == NULL)
+			goto end;
+		*data = newdata;
 		data_len = read(sd, *data + *len, SCVP_MSG_BLOCK_SIZE);
+		if (data_len == -1)
+			goto end;
 		*len += data_len;
 		if (data_len < SCVP_MSG_BLOCK_SIZE)
 			break;
@@ -45,5 +53,6 @@ int recv_data(int sd, unsigned char **data, int *len)
 
 end:
 	free(*data);
+	*data = NULL;
 	return 1;
 }

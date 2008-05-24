@@ -10,6 +10,7 @@
 
 #include "connection.h"
 #include "channel.h"
+#include "scvp_defs.h"
 #include "scvp_proto.h"
 #include "path_checker.h"
 #include "logger.h"
@@ -33,21 +34,26 @@ void *connection_thread(void *conn)
 			log_msg(LOG_DEBUG, "Failed receive SCVP request (thread %lu)", thr_id);
 			goto end;
 		}
-		if (!(resp_data = process_scvp_request(rqst_data, rqst_len, &resp_len))) {
-			log_msg(LOG_DEBUG, "Failed to process SCVP request (thread %lu)", thr_id);
+		if (!rqst_len) {
+			free(rqst_data);
+			log_msg(LOG_DEBUG, "Connection closed by client (thread %lu)", thr_id);
 			goto end;
 		}
+		if (!(resp_data = process_scvp_request(rqst_data, rqst_len, &resp_len))) {
+			log_msg(LOG_DEBUG, "Failed to process SCVP request (thread %lu)", thr_id);
+			free(rqst_data);
+			goto end;
+		}
+		free(rqst_data);
 		if (send_data(sd, resp_data, resp_len)) {
 			log_msg(LOG_DEBUG, "send() failed to send SCVP response (thread %lu)\n", thr_id);
+			free(resp_data);
 			goto end;
 		}
 		free(resp_data);
-		resp_data = NULL;
 	}
 
 end:
-	free(rqst_data);
-	free(resp_data);
 	close(sd);
 	log_msg(LOG_DEBUG, "Finishing thread %lu", thr_id);
 	return NULL;

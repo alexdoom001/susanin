@@ -2,7 +2,6 @@
 #include <syslog.h>
 #include <unistd.h>
 #include <time.h>
-#include <linux/limits.h>
 #include <openssl/x509v3.h>
 #include <openssl/x509_vfy.h>
 #include <openssl/ssl.h>
@@ -12,6 +11,7 @@
 #include <curl/curl.h>
 
 #include "path_checker.h"
+#include "scvp_defs.h"
 #include "scvp_proto.h"
 #include "ocsp_verify.h"
 #include "cache.h"
@@ -77,14 +77,16 @@ static char **get_crldps(X509 *cert, int *str_num)
 
 char* curl_load_file(const char* url)
 {
-	int err = 1;
+	int err = 1, fd;
 	char *tmp_file;
-	FILE *fp;
+	FILE *file = NULL;
 	CURL *curl = NULL;
 
-	if (!(tmp_file = tempnam(cfg.tmp_path, NULL)))
+	if (!(tmp_file = g_build_filename(cfg.tmp_path, "susaninXXXXXXXX", NULL)))
 		return NULL;
-	if (!(fp = fopen(tmp_file, "wb")))
+	if ((fd = mkstemp(tmp_file)) == -1)
+		goto end;
+	if (!(file = fdopen(fd, "wb")))
 		goto end;
 	if (!(curl = curl_easy_init()))
 		goto end;
@@ -92,7 +94,7 @@ char* curl_load_file(const char* url)
 		goto end;
 	if ((curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, NULL)) != CURLE_OK)
 		goto end;
-	if ((curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp)) != CURLE_OK)
+	if ((curl_easy_setopt(curl, CURLOPT_WRITEDATA, file)) != CURLE_OK)
 		goto end;
 	if ((curl_easy_perform(curl)) != CURLE_OK)
 		goto end;
@@ -100,10 +102,10 @@ char* curl_load_file(const char* url)
 
 end:
 	curl_easy_cleanup(curl);
-	fclose(fp);
+	fclose(file);
 	if (!err)
 		return tmp_file;
-	free(tmp_file);
+	g_free(tmp_file);
 	return NULL;
 }
 
@@ -275,7 +277,7 @@ static int check_anchor_certificate(X509_STORE_CTX *store_ctx, X509 * anchor)
 	return 1;
 }
 
-X509_VERIFY_PARAM *cert_policy_values(struct scvp_request *rqst)
+static X509_VERIFY_PARAM *cert_policy_values(const struct scvp_request *rqst)
 {
 	GSList *iterator;
 	ASN1_OBJECT *obj;
@@ -332,7 +334,7 @@ static void chain_free(STACK_OF(X509) *uchain)
 	sk_X509_free(uchain);
 }
 
-int build_pkc_path(X509 *cert, X509 *anchor, STACK_OF(X509) *uchain, struct scvp_request *scvp_rqst)
+static int build_pkc_path(X509 *cert, X509 *anchor, STACK_OF(X509) *uchain, const struct scvp_request *scvp_rqst)
 {
 	int err = 1, flags = 0;
 	X509_STORE *store;
@@ -483,9 +485,9 @@ end:
 	return NULL;
 }
 
-extern void *asn1_definitions;
+extern struct scvp_proto_ctx *scvp_ctx;
 
-unsigned char *process_scvp_request(unsigned char *rqst_data, int rqst_len, int *resp_len)
+unsigned char *process_scvp_request(const unsigned char *rqst_data, int rqst_len, int *resp_len)
 {
 	int path_err, ret;
 	struct scvp_request *scvp_rqst;
@@ -497,7 +499,7 @@ unsigned char *process_scvp_request(unsigned char *rqst_data, int rqst_len, int 
 	STACK_OF(X509) *uchain = NULL;
 	unsigned char *resp_data = NULL, *ptr;
 
-	if (!(scvp_rqst = unpack_scvp_request(asn1_definitions, rqst_data, rqst_len))) {
+	if (!(scvp_rqst = unpack_scvp_request(scvp_ctx, rqst_data, rqst_len))) {
 		log_msg(LOG_DEBUG, "SCVP request unpack failed");
 		return NULL;
 	}
@@ -558,7 +560,7 @@ unsigned char *process_scvp_request(unsigned char *rqst_data, int rqst_len, int 
 		log_msg(LOG_DEBUG, "Failed to create scvp response");
 		goto end;
 	}
-	if (!(resp_data = pack_scvp_response(asn1_definitions, scvp_resp, resp_len))) {
+	if (!(resp_data = pack_scvp_response(scvp_ctx, scvp_resp, resp_len))) {
 		log_msg(LOG_DEBUG, "Failed to create SCVP response");
 		goto end;
 	}

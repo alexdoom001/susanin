@@ -5,14 +5,14 @@
 #include <glib/gstdio.h>
 #include <sys/file.h>
 
-#include "scvp_proto.h"
+#include "scvp_defs.h"
 #include "cache.h"
 
 #define UPDATE_X509 0x01
 #define UPDATE_CRL  0x02
 #define SCVP_LINKS  0x04
 
-static int check_cert_coincidence(X509 *cert, const char *cache_path, const char *draft_name)
+static int check_cert_coincidence(const X509 *cert, const char *cache_path, const char *draft_name)
 {
 	int err = 1, i;
 	char file_name[32];
@@ -60,7 +60,7 @@ end:
 	return err;
 }
 
-static int check_crl_coincidence(X509_CRL *crl, const char *cache_path, const char *draft_name)
+static int check_crl_coincidence(const X509_CRL *crl, const char *cache_path, const char *draft_name)
 {
 	int err = 1, i;
 	char file_name[32];
@@ -225,7 +225,7 @@ static void update_links(const char *target_dir, int flags)
 			g_free(file_path);
 			continue;
 		}
-		if (flags && UPDATE_X509)
+		if (flags & UPDATE_X509)
 			update_cert_link(bio, file, target_dir, flags);
 		else
 			update_crl_link(bio, file, target_dir);
@@ -237,7 +237,7 @@ static void update_links(const char *target_dir, int flags)
 
 int main(int argc, char **argv)
 {
-	int flags;
+	int flags = 0;
 
 	if (argc != 3 && argc != 4) {
 		printf("Usage: rehash [path] [ X509 | CRL ] [scvplinks]\n");
@@ -254,7 +254,7 @@ int main(int argc, char **argv)
 		return 1;
 	}
 	if (argc == 4 && !strcmp(argv[3], "scvplinks"))
-		flags = SCVP_LINKS;
+		flags |= SCVP_LINKS;
 	update_links(argv[1], flags);
 	return 0;
 }

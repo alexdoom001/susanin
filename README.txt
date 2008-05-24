@@ -3,6 +3,9 @@ This is RFC3280 compliant daemon with client api.
 
 To run with NIST PKI Test:
 
+make (to build susanin, rehash and liscvocli.so)
+make path_test (to build test client)
+
 untar nist_tests.tar
 run susanin with default config:
 ./susanin -c susanin.conf (or set -d to run as daemon)

@@ -9,7 +9,7 @@
 #include "config.h"
 #include "logger.h"
 
-struct validation_values val_values[] = {
+static const struct validation_values val_values[] = {
 	{"available",     CHECK_AVAILABLE},
 	{"accurate",      CHECK_ACCURATE},
 	{"peer",          CHECK_PEER},

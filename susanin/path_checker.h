@@ -9,6 +9,7 @@
 
 #define MAX_CRL_HASH_COLLISION 100
 
-unsigned char *process_scvp_request(unsigned char *rqst_data, int rqst_len, int *resp_len);
+unsigned char *process_scvp_request(const unsigned char *rqst_data, int rqst_len, int *resp_len)
+	__attribute__((nonnull));
 
 #endif /* PATH_BUILDER_H */

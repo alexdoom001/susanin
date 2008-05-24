@@ -3,10 +3,12 @@
 #include <openssl/ssl.h>
 #include <glib.h>
 
+#include "scvp_defs.h"
 #include "scvp_proto.h"
 #include "cache.h"
 
-ASN1_INTEGER *convert_serial_to_asn1(unsigned char *serial, int serial_len)
+#if 0
+ASN1_INTEGER *convert_serial_to_asn1(const unsigned char *serial, int serial_len)
 {
 	ASN1_INTEGER *asn1_serial = NULL;
 	BIGNUM *bn;
@@ -17,8 +19,9 @@ ASN1_INTEGER *convert_serial_to_asn1(unsigned char *serial, int serial_len)
 	BN_free(bn);
 	return asn1_serial;
 }
+#endif
 
-int convert_asn1_to_serial(ASN1_INTEGER *asn1_serial, unsigned char *serial, unsigned int *serial_len)
+int convert_asn1_to_serial(const ASN1_INTEGER *asn1_serial, unsigned char *serial, unsigned int *serial_len)
 {
 	int err = 1, len;
 	BIGNUM *bn;
@@ -104,7 +107,7 @@ end:
 	return 1;
 }
 
-struct scvp_cert_ref *get_cert_ref(X509 *cert)
+struct scvp_cert_ref *get_cert_ref(const X509 *cert)
 {
 	struct scvp_cert_ref *cert_ref;
 
@@ -121,7 +124,7 @@ struct scvp_cert_ref *get_cert_ref(X509 *cert)
 	return cert_ref;
 }
 
-int cert_ref_cmp(struct scvp_cert_ref *cert1, struct scvp_cert_ref *cert2)
+int cert_ref_cmp(const struct scvp_cert_ref *cert1, const struct scvp_cert_ref *cert2)
 {
 	if (!cert1 || !cert2)
 		return 1;
@@ -136,7 +139,7 @@ int cert_ref_cmp(struct scvp_cert_ref *cert1, struct scvp_cert_ref *cert2)
 	return 0;
 }
 
-int check_cached_cert_ref(struct scvp_cert_ref *cert_ref, const char *cache_path, X509 **cached_cert)
+int check_cached_cert_ref(const struct scvp_cert_ref *cert_ref, const char *cache_path, X509 **cached_cert)
 {
 	int err = 0, i;
 	BIO *bio;
@@ -224,7 +227,7 @@ end:
 	return err;
 }
 
-static int create_cert_link(X509 *cert, const char *cert_path, const char *cache_path)
+static int create_cert_link(const X509 *cert, const char *cert_path, const char *cache_path)
 {
 	int err = 1, i;
 	struct scvp_cert_ref *cert_ref;

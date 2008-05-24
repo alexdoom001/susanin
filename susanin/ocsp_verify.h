@@ -14,7 +14,7 @@ struct cert_ocsp_ref {
 
 struct cert_ocsp_ref *cert_ocsp_alloc(void);
 void cert_ocsp_free(struct cert_ocsp_ref *cert_ocsp);
-
-int check_revocation_ocsp(X509_STORE_CTX *ctx);
+int check_revocation_ocsp(X509_STORE_CTX *ctx)
+	__attribute__((nonnull));
 
 #endif /* VFY_OCSP_H */

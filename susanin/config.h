@@ -23,6 +23,7 @@ struct config {
 
 struct config cfg;
 
-int load_config(const char *conf_file);
+int load_config(const char *conf_file)
+	__attribute__((nonnull));
 
 #endif /* CONFIG_H */

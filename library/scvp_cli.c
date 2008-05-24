@@ -5,13 +5,13 @@
 #include <glib.h>
 #include <openssl/ssl.h>
 
+#include "scvp_defs.h"
 #include "scvp_proto.h"
 #include "channel.h"
 #include "cache.h"
 #include "scvp_cli.h"
 
-static struct scvp_request *create_scvp_request(X509 *cert, X509 *anchor, STACK_OF(X509) *uchain, unsigned int checks,
-		const char **user_poly_set, int user_poly_num, int user_poly_falgs)
+static struct scvp_request *create_scvp_request(const scvp_rqst_ctx *rqst_ctx)
 {
 	int i;
 	X509 *cert_tmp;
@@ -24,15 +24,15 @@ static struct scvp_request *create_scvp_request(X509 *cert, X509 *anchor, STACK_
 
 	if (!(cert_der = cert_der_alloc()))
 		goto end;
-	cert_der->cert_len = i2d_X509(cert, &cert_der->cert);
+	cert_der->cert_len = i2d_X509(rqst_ctx->cert, &cert_der->cert);
 	if (cert_der->cert_len <= 0) {
 		cert_der_free(cert_der);
 		goto end;
 	}
 	rqst->queried_certs = g_slist_append(rqst->queried_certs, cert_der);
 
-	while (1) {
-		if (!(cert_tmp = sk_X509_pop(uchain)))
+	for (i = 0; i < sk_X509_num(rqst_ctx->uchain); i++) {
+		if (!(cert_tmp = sk_X509_value(rqst_ctx->uchain, i)))
 			break;
 		if (!(cert_der = cert_der_alloc()))
 			goto end;
@@ -44,21 +44,21 @@ static struct scvp_request *create_scvp_request(X509 *cert, X509 *anchor, STACK_
 		rqst->inter_certs = g_slist_append(rqst->inter_certs, cert_der);
 	}
 
-	if (anchor) {
-		if (!(anchor_ref = get_cert_ref(anchor)))
+	if (rqst_ctx->anchor) {
+		if (!(anchor_ref = get_cert_ref(rqst_ctx->anchor)))
 			goto end;
 		rqst->trust_anchors = g_slist_append(rqst->trust_anchors, anchor_ref);
 	}
 
-	rqst->checks = checks;
+	rqst->checks = rqst_ctx->checks;
 	rqst->val_poly = VAL_POLY_DEFAULT;
 
-	for (i = 0; i < user_poly_num; i++) {
-		if (strlen(user_poly_set[i]) > SCVP_OID_STR_MAX_SIZE - 1)
+	for (i = 0; i < rqst_ctx->user_poly_num; i++) {
+		if (strlen(rqst_ctx->user_poly_set[i]) > SCVP_OID_STR_MAX_SIZE - 1)
 			goto end;
-		rqst->user_poly_set = g_slist_append(rqst->user_poly_set, strdup(user_poly_set[i]));
+		rqst->user_poly_set = g_slist_append(rqst->user_poly_set, strdup(rqst_ctx->user_poly_set[i]));
 	}
-	rqst->user_poly_flags = user_poly_falgs;
+	rqst->user_poly_flags = rqst_ctx->user_poly_falgs;
 	return rqst;
 
 end:
@@ -66,7 +66,7 @@ end:
 	return NULL;
 }
 
-static int process_scvp_response(struct scvp_request *rqst, struct scvp_response *resp)
+static int process_scvp_response(const struct scvp_request *rqst, const struct scvp_response *resp)
 {
 	struct scvp_cert_reply *cert_reply;
 	struct scvp_cert_der *cert_der;
@@ -90,8 +90,22 @@ static int process_scvp_response(struct scvp_request *rqst, struct scvp_response
 	return SCVP_CLI_CERT_OK;
 }
 
-int scvp_cli_check_certificate(struct scvp_cli_ctx *cli_ctx, X509 *cert, X509 *anchor, STACK_OF(X509) *uchain,
-		unsigned int checks, const char **user_poly_set, int user_poly_num, int user_poly_falgs)
+static struct scvp_proto_ctx *cli_ctx;
+
+void __attribute__ ((constructor))
+scvp_cli_init(void)
+{
+	cli_ctx = scvp_init();
+}
+
+void __attribute__ ((destructor))
+scvp_cli_deinit(void)
+{
+	scvp_deinit(cli_ctx);
+}
+
+int __attribute__ ((visibility ("default")))
+scvp_cli_check_certificate(const scvp_cli_rqst *cli_rqst)
 {
 	int err = 0, ret, sd;
 	struct sockaddr_un sa;
@@ -100,9 +114,7 @@ int scvp_cli_check_certificate(struct scvp_cli_ctx *cli_ctx, X509 *cert, X509 *a
 	unsigned char *rqst_data = NULL, *resp_data = NULL;
 	int rqst_len, resp_len;
 
-	if (!cli_ctx->socket_file || !cli_ctx->asn1_defs)
-		return SCVP_CLI_ERR_PARAMS;
-	if (!checks)
+	if (!cli_rqst->socket_file)
 		return SCVP_CLI_ERR_PARAMS;
 
 	sd = socket(AF_UNIX, SOCK_SEQPACKET, 0);
@@ -110,19 +122,18 @@ int scvp_cli_check_certificate(struct scvp_cli_ctx *cli_ctx, X509 *cert, X509 *a
 		return SCVP_CLI_ERR_INTERNAL;
 
 	sa.sun_family = AF_UNIX;
-	strcpy(sa.sun_path, cli_ctx->socket_file);
+	strcpy(sa.sun_path, cli_rqst->socket_file);
 
 	ret = connect(sd, (struct sockaddr *) &sa, sizeof (sa));
 	if (ret == -1) {
 		err = SCVP_CLI_ERR_CONNECT;
 		goto end;
 	}
-
-	if (!(scvp_rqst = create_scvp_request(cert, anchor, uchain, checks, user_poly_set, user_poly_num, user_poly_falgs))) {
+	if (!(scvp_rqst = create_scvp_request(&cli_rqst->rqst_ctx))) {
 		err = SCVP_CLI_ERR_BAD_RQST;
 		goto end;
 	}
-	if (!(rqst_data = pack_scvp_request(cli_ctx->asn1_defs, scvp_rqst, &rqst_len))) {
+	if (!(rqst_data = pack_scvp_request(cli_ctx, scvp_rqst, &rqst_len))) {
 		err = SCVP_CLI_ERR_INTERNAL;
 		goto end;
 	}
@@ -134,7 +145,11 @@ int scvp_cli_check_certificate(struct scvp_cli_ctx *cli_ctx, X509 *cert, X509 *a
 		err = SCVP_CLI_ERR_RECV;
 		goto end;
 	}
-	if (!(scvp_resp = unpack_scvp_response(cli_ctx->asn1_defs, resp_data, resp_len))) {
+	if (!resp_len) {
+		err = SCVP_CLI_ERR_RECV;
+		goto end;
+	}
+	if (!(scvp_resp = unpack_scvp_response(cli_ctx, resp_data, resp_len))) {
 		err = SCVP_CLI_ERR_BAD_RESP;
 		goto end;
 	}
@@ -148,38 +163,3 @@ end:
 	close(sd);
 	return err;
 }
-
-struct scvp_cli_ctx *scvp_cli_init(const char *socket_file, const char *untrusted_path)
-{
-	struct scvp_cli_ctx *cli_ctx;
-
-	if (!socket_file)
-		return NULL;
-	if (!(cli_ctx = malloc(sizeof(*cli_ctx))))
-		return NULL;
-	if (!(cli_ctx->socket_file = strdup(socket_file))) {
-		free(cli_ctx);
-		return NULL;
-	}
-	if (!(cli_ctx->untrusted_path = strdup(untrusted_path))) {
-		free(cli_ctx->socket_file);
-		free(cli_ctx);
-		return NULL;
-	}
-	if (!(cli_ctx->asn1_defs = scvp_initialize("scvp.asn"))) {
-		free(cli_ctx->untrusted_path);
-		free(cli_ctx->socket_file);
-		free(cli_ctx);
-		return NULL;
-	}
-	return cli_ctx;
-}
-
-void scvp_cli_deinit(struct scvp_cli_ctx *cli_ctx)
-{
-	scvp_deinitialize(cli_ctx->asn1_defs);
-	free(cli_ctx->socket_file);
-	free(cli_ctx->untrusted_path);
-	free(cli_ctx);
-}
-
